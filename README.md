@@ -479,6 +479,18 @@ portable/
 
 `.gitignore` 采用默认排除 + 显式放行策略。**提交时只用 `git add <具体文件>`，禁止 `git add .`**。
 
+仓库自带 `scripts/precommit-check.mjs` 门禁，扫描暂存区全部内容，命中真实账号昵称 / 抖音号 / Cookie 值 / token 前缀即以非零退出拒绝提交：
+
+```bash
+node scripts/precommit-check.mjs     # 提交前手动跑
+# 或装成本机钩子（仓库已含该脚本，克隆后自行启用）
+cp scripts/precommit-check.mjs .git/hooks/ 2>/dev/null || true
+echo 'node scripts/precommit-check.mjs' > .git/hooks/pre-commit
+chmod +x .git/hooks/pre-commit
+```
+
+门禁的模式串用片段拼接构造，脚本自身不含任何完整敏感串，因此可安全放进公开仓库。
+
 ### 使用边界
 
 - 本项目是**个人自动化工具**，仅用于自己的账号，不提供任何批量注册、刷量、破解、绕过风控或代抢服务。
