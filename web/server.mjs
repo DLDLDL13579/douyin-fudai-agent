@@ -398,13 +398,20 @@ function buildStatus() {
     exec: execStats(),
     accountLabels: accLabels,
     // 🎯 分账号今日战绩：直接回答「哪个号抢了多少」，不再让用户从混在一起的明细里数
+    //    ⚠ 2026-11-05 00:57 跨天后暴露：只列有数据的账号时，某个号今日 0 战绩就整行消失，
+    //      用户会误以为它没在跑。改为「所有已注册账号都占位」，0 也显示，避免误判。
     byAccount: (() => {
       const m = {};
-      for (const r of todayRows) {
-        const k = r.account || 'default';
+      const ensure = (k) => {
         if (!m[k]) m[k] = { account: k, label: labelOfAccount(k, accLabels), total: 0, joined: 0 };
-        m[k].total++;
-        if (r.result === 'joined' || r.result === 'maybe-joined') m[k].joined++;
+        return m[k];
+      };
+      // 先给所有已注册账号占位：meta.json 里是 main / main2，数据里主号叫 default
+      for (const a of accs) ensure(a.name === 'main' ? 'default' : a.name);
+      for (const r of todayRows) {
+        const e = ensure(r.account || 'default');
+        e.total++;
+        if (r.result === 'joined' || r.result === 'maybe-joined') e.joined++;
       }
       return Object.values(m).sort((a, b) => b.joined - a.joined);
     })(),
