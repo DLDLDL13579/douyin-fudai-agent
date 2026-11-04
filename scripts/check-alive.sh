@@ -3,7 +3,13 @@
 # 2026-11-03 在此栽过一次（盲跑 18 小时），固化成每次巡检必查。
 PORT="${1:-9750}"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-LOG_PATH="${DY_ALIVE_LOG:-$ROOT_DIR/douyin-auto/h35.log}"
+# ⚠ 日志必须跟着端口走，否则查 9751 时会拿主实例的「守候开奖」误放行。
+#    2026-11-05 02:57 踩过：9751 页面 len=20「直播加载中」，却因主实例在守候而报 OK。
+case "$PORT" in
+  9751) DEFAULT_LOG="$ROOT_DIR/accounts/main2/work/h35.log" ;;
+  *)    DEFAULT_LOG="$ROOT_DIR/douyin-auto/h35.log" ;;
+esac
+LOG_PATH="${DY_ALIVE_LOG:-$DEFAULT_LOG}"
 DY_ALIVE_LOG="$LOG_PATH" node -e "
 (async()=>{
   try{
@@ -41,15 +47,19 @@ DY_ALIVE_LOG="$LOG_PATH" node -e "
     // 🎯 守候开奖期间页面被开奖浮层占满，innerText 必然变短（实测 600+ → 105），
     //    这恰恰说明系统正常工作。此时不能再用页面长度判断，直接看日志状态。
     //    2026-11-03 22:57 连续 3 次误报 SUSPECT_SHORT_PAGE 就是踩了这个。
-    try{
-      const fs=require('fs');
-      const logPath=process.env.DY_ALIVE_LOG;
-      const tail=fs.readFileSync(logPath,'utf8').split('\n').filter(Boolean).slice(-6).join('\n');
-      if(/守候开奖中|守候开奖 \d+s/.test(tail)){
-        console.log('OK len='+len+' (守候开奖中，页面被开奖浮层占满属正常)');
-        ws.close(); return;
-      }
-    }catch(e){}
+    //    ⚠ 但 len<60 是空页面「直播加载中」，绝不属于守候浮层，不能被豁免。
+    //      2026-11-05 02:57 的 9751 假 OK 正是这个漏洞。
+    if(len>=60){
+      try{
+        const fs=require('fs');
+        const logPath=process.env.DY_ALIVE_LOG;
+        const tail=fs.readFileSync(logPath,'utf8').split('\n').filter(Boolean).slice(-6).join('\n');
+        if(/守候开奖中|守候开奖 \d+s/.test(tail)){
+          console.log('OK len='+len+' (守候开奖中，页面被开奖浮层占满属正常)');
+          ws.close(); return;
+        }
+      }catch(e){}
+    }
     // 重测 8 次累计约 13 秒仍未稳定 → 才认为页面真的有问题
     if(!stable && len<60){ console.log('EMPTY_PAGE len='+len+' (重测 13 秒仍为空，标签可能卡死)'); process.exit(5); }
     if(!stable && len>=60 && len<350){ console.log('SUSPECT_SHORT_PAGE len='+len+' (cookie 在但页面 13 秒未渲染完成)'); process.exit(3); }
