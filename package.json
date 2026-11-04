@@ -1,0 +1,29 @@
+{
+  "name": "douyin-fudai",
+  "version": "1.0.0",
+  "description": "抖音福袋助手 - 自动发现并参与直播间福袋",
+  "private": true,
+  "type": "module",
+  "bin": "scripts/app.mjs",
+  "scripts": {
+    "start": "node scripts/app.mjs",
+    "status": "node scripts/app.mjs status",
+    "build:win": "pkg . --targets node22-win-x64 --output dist/douyin-fudai.exe",
+    "build:mac": "pkg . --targets node22-macos-arm64 --output dist/douyin-fudai-mac"
+  },
+  "pkg": {
+    "scripts": [
+      "scripts/app.mjs",
+      "scripts/hunter35.mjs",
+      "scripts/shared-json.mjs",
+      "scripts/account-manager.mjs",
+      "scripts/paths.mjs",
+      "web/server.mjs"
+    ],
+    "assets": [
+      "data/*.json",
+      "scripts/*.txt"
+    ],
+    "outputPath": "dist"
+  }
+}

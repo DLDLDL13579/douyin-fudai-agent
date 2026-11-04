@@ -1,0 +1,6 @@
+{
+ "day": 8000,
+ "night": 50000,
+ "nightStart": 19,
+ "nightEnd": 24
+}

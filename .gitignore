@@ -1,0 +1,62 @@
+# ============================================================
+# 抖音福袋 · 公开仓库忽略规则
+#
+# ⚠ 本项目包含账号登录态与运行数据，绝不能进公开仓库。
+#   提交时只用显式白名单 `git add <具体文件>`，禁止 `git add .`
+# ============================================================
+
+# ── 账号登录态与 Chrome 用户资料（最高风险）──────────────────
+accounts/
+douyin-auto/
+scripts/profile*/
+scripts/cookies.json
+scripts/*cookies*.json
+**/chrome-profile/
+**/Cookies
+**/Cookies-journal
+**/Cookies.bak*
+**/SingletonCookie
+**/login-state.json
+**/Local Storage/
+**/Session Storage/
+.env
+.env.*
+*.token
+*.pem
+*.key
+
+# ── 运行时数据与产物 ────────────────────────────────────────
+data/*.jsonl
+data/anchors.json
+data/room-names.json
+data/retired-rooms.json
+data/vip-cooldown.json
+data/vip-fail-count.json
+data/probe-today.json
+data/fudai-dom-samples.jsonl
+douyin-auto/
+reports/
+exports/
+dist/
+node_modules/
+*.png.tmp
+h35-*.png
+AFTER-*.png
+FANSFAIL-*.png
+PACKET-*.png
+DRAWEND-*.png
+
+# ── 日志与临时文件 ──────────────────────────────────────────
+*.log
+*.log.*
+*.tmp
+*.swp
+.DS_Store
+.workbuddy/
+.workbuddy-ai/
+*.lock
+nohup.out
+
+# ── IDE / 编辑器 ────────────────────────────────────────────
+.idea/
+.vscode/
