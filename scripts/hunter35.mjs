@@ -79,6 +79,15 @@ const WS=Math.max(0.1,Math.min(2,Number(_WAIT.scale)||1));   // 限制在 0.1~2�
 const DRAW_BUF=Math.max(0,Math.min(600,Number(_WAIT.drawBufferSec)||0));
 const DRAW_MAX=Math.max(60,Math.min(3600,Number(_WAIT.drawMaxSec)||1200));
 const DRAW_FALLBACK=Math.max(60,Math.min(3600,Number(_WAIT.drawFallbackSec)||900));
+// 📌 关注策略单一数据源：data/follow-config.json（2026-11-05 用户定稿「抢福袋前都需要先关注主播」）。
+//    关注必须在 tryJoin 打开福袋面板「之前」做：面板是全屏遮罩，会挡住左上角关注按钮的
+//    elementFromPoint 命中。实测历史 73 次关注 71 次失败（45 no-btn / 26 clicked-unverified），
+//    而干净页面实测 3/4 点击成功且刷新后持久，根因就是调用时机被遮罩挡住。
+let _FOLLOW={enabled:true,requireFollowBeforeJoin:true,allowInconclusive:true};
+try{ _FOLLOW=Object.assign(_FOLLOW, JSON.parse(fs.readFileSync(DATA_DIR+'/follow-config.json','utf8'))||{}); }catch(e){}
+const FOLLOW_ENABLED=!!_FOLLOW.enabled;
+const FOLLOW_GATE=!!_FOLLOW.requireFollowBeforeJoin;
+const FOLLOW_ALLOW_INCONCLUSIVE=!!_FOLLOW.allowInconclusive;
 function getMinOnline(){
   const h=new Date().getHours();
   // 晚间 19:00-24:00 用高门槛，凌晨 0-6 点按白天算（人少但仍在播）
@@ -274,62 +283,102 @@ const SCAN=`(()=>{
     notLive:(/直播已结束|未开播|暂无直播|主播不在|休息中/.test(b))};
 })()`;
 
-// 📌 自动关注主播（用于经常发福袋的房间）
+// 📌 自动关注主播（2026-11-05 起：抢福袋「之前」调用，页面干净无遮罩）
+//    返回值新增 inconclusive：页面尚未加载好，此时不能判定「没关注」，
+//    否则会把加载慢误当风控拦截而丢掉福袋。
 async function ensureFollow(tab, room){
   try{
     // 🔑 用 elementFromPoint 扫描左上角，找 BUTTON（关注按钮 innerText 含快捷键，不能精确匹配）
+    //    ⚠ 2026-11-05 干净对照实测：抖音「已关注」的真实表现是左上角变成「+加粉丝团」，
+    //      页面里既不显示「已关注」也不显示「互相关注」。旧探针只认这两个词，
+    //      于是把「已关注」误判成 no-btn；tryJoin 里 cond-follow:fail(no-btn) 直接
+    //      return need-follow 放弃参与，今日 4 个福袋就是这么丢的。
     const st = await ev(tab, `(()=>{
-      var followed=false, btn=null;
-      // 先扫描左上角区域找按钮
+      var followed=false, btn=null, bodyLen=(document.body.innerText||'').length;
+      // ① 服务端视角：已关注态的头部是「+加粉丝团」，且没有独立「关注」按钮。
+      //    只取 y<70 且 x<600 的头部文本，避免把弹幕/商品卡里的「加粉丝团」算进来。
+      var head='';
+      for(const el of document.querySelectorAll('button,div,span,a')){
+        var r=el.getBoundingClientRect();
+        if(r.y>70||r.x>600||r.width<10||r.height<8)continue;
+        var h=(el.innerText||'').trim();
+        if(h&&h.length<=14) head += h.replace(/\\n/g,'') + '|';
+      }
+      if(/已关注|互相关注/.test(head)) followed=true;
+      if(!followed && /加粉丝团/.test(head)){
+        var hasFollowBtn=false;
+        for(const el of document.querySelectorAll('button,div,span')){
+          var t=(el.innerText||'').trim();
+          if(!/^关注\\s*\\n?\\s*G?$/.test(t))continue;
+          var q=el.getBoundingClientRect();
+          if(q.y<130&&q.x<520&&q.width>=30&&q.height>=16){hasFollowBtn=true;break;}
+        }
+        if(!hasFollowBtn) followed=true;
+      }
+      // ② 扫描左上角找「关注」按钮（未关注态）
       for(var y=15;y<=60;y+=4){
         for(var x=60;x<=430;x+=5){
-          var el=document.elementFromPoint(x,y);
-          if(!el)continue;
-          var t=(el.innerText||el.textContent||'').trim();
-          if(!t||t.length>12)continue;
-          if(t.indexOf('已关注')>=0||t.indexOf('互相关注')>=0){ followed=true; continue; }
-          if(t.indexOf('关注')>=0 && !btn){
-            var rc=el.getBoundingClientRect();
+          var el2=document.elementFromPoint(x,y);
+          if(!el2)continue;
+          var t2=(el2.innerText||el2.textContent||'').trim();
+          if(!t2||t2.length>12)continue;
+          if(t2.indexOf('已关注')>=0||t2.indexOf('互相关注')>=0){ followed=true; continue; }
+          if(t2.indexOf('关注')>=0 && t2.indexOf('加粉丝团')<0 && !btn){
+            var rc=el2.getBoundingClientRect();
             if(rc.width>=30&&rc.height>=16&&rc.width<120){
-              btn={x:Math.round(rc.x+rc.width/2), y:Math.round(rc.y+rc.height/2), w:Math.round(rc.width), t:t.slice(0,8)};
+              btn={x:Math.round(rc.x+rc.width/2), y:Math.round(rc.y+rc.height/2), w:Math.round(rc.width), t:t2.slice(0,8)};
             }
           }
         }
         if(btn)break;
       }
-      return {followed, btn};
+      return {followed, btn, bodyLen, head:head.slice(0,120)};
     })()`, 25000);
-    if(!st || st.__err) return {ok:false,reason:'probe-fail'};
+    if(!st || st.__err) return {ok:false,inconclusive:true,reason:'probe-fail'};
     if(st.followed) return {ok:true,reason:'already'};
-    if(!st.btn) return {ok:false,reason:'no-btn'};
+    // ⚠ 无关注按钮时不能直接判「关注失败」：页面可能仍在加载（实测 len=199 时头部
+    //    只有主播名，既无「加粉丝团」也无「关注」按钮，是渲染中间态而非已关注态）。
+    //    这类不确定情形一律 inconclusive，交给 allowInconclusive 放行抢，避免丢福袋。
+    //    判据：头部没有「加粉丝团」（已关注标志）、页面长度 <350、或 head 极短。
+    if(!st.btn){
+      const _head=(st.head||'');
+      const _mid = (st.bodyLen||0)<350 || _head.length<20 || !/加粉丝团/.test(_head);
+      if(_mid) return {ok:false,inconclusive:true,reason:'page-partial'};
+      return {ok:false,reason:'no-btn'};
+    }
 
     const b=st.btn;
     await clickXY(tab, b.x, b.y);
     await sleep(5000);   // 关注请求 + UI 刷新需要时间，3.5s 偏短
 
-    // 验证：必须重新扫描整个左上角确认出现「已关注」
-    // ⚠ 原来只要点击位置元素消失（gone）就算成功，实测产生假阳性：
-    //   542315167383 记为已关注，但直播间按钮仍是「关注」，等于完全没关注上。
-    //   现在要求 must-see「已关注」，扫描不到就记为 uncertain 下次重试。
-    // 🔑 2026-11-04 实测修正：抖音关注成功的真实表现是「按钮消失」，不是出现「已关注」。
-    //    之前 24 次全部误判为 unverified，就是因为死等「已关注」三个字，
-    //    而抖音关注后那个位置的「关注」按钮会直接换成「+｜加粉丝团」。
-    //    三路判定，任一成立即成功：
-    //      ① 页面出现「关注成功」toast（实测点击后中央弹出）
-    //      ② 出现「已关注 / 互相关注」文字
-    //      ③ 原来那个「关注」按钮不见了
+    // 验证：2026-11-05 干净对照实测，关注成功后左上角变成「+加粉丝团」，
+    //    页面不出现「已关注」文字。四路判定，任一成立即成功：
+    //      ① 「关注成功」toast    ② 「已关注 / 互相关注」文字
+    //      ③ 头部出现「加粉丝团」且无独立关注按钮（真实已关注态）
+    //      ④ 原「关注」按钮消失
+    //    只在页面确实加载好（bodyLen>=200）时才允许判失败，避免加载慢被误判为风控拦截。
     const v = await ev(tab, `(()=>{
       var b=document.body.innerText||'';
-      if(/关注成功/.test(b)) return {done:true, how:'toast'};
-      if(/已关注|互相关注/.test(b)) return {done:true, how:'followed-text'};
+      var len=b.length;
+      if(/关注成功/.test(b)) return {done:true, how:'toast', len:len};
+      if(/已关注|互相关注/.test(b)) return {done:true, how:'followed-text', len:len};
+      var head='';
+      for(const el of document.querySelectorAll('button,div,span,a')){
+        var r=el.getBoundingClientRect();
+        if(r.y>70||r.x>600||r.width<10||r.height<8)continue;
+        var h=(el.innerText||'').trim();
+        if(h&&h.length<=14) head += h.replace(/\\n/g,'') + '|';
+      }
       var still=false;
       for(const el of document.querySelectorAll('button,div,span')){
         var t=(el.innerText||'').trim();
-        if(t!=='关注' && !/^关注\s*\n?\s*G?$/.test(t)) continue;
-        var r=el.getBoundingClientRect();
-        if(r.width>=30 && r.height>=16 && r.width<150 && r.y<130){ still=true; break; }
+        if(t!=='关注' && !/^关注\\s*\\n?\\s*G?$/.test(t)) continue;
+        var r2=el.getBoundingClientRect();
+        if(r2.width>=30 && r2.height>=16 && r2.width<150 && r2.y<130){ still=true; break; }
       }
-      return {done:!still, how: still?'still-there':'btn-gone'};
+      if(/加粉丝团/.test(head) && !still) return {done:true, how:'fans-group-state', len:len};
+      if(len<200) return {done:false, how:'page-loading', len:len, inconclusive:true};
+      return {done:!still, how: still?'still-there':'btn-gone', len:len};
     })()`, 20000);
     const ok = !!(v && v.done);
     // 无论验证结果都记入已尝试（避免反复点击同一主播）
@@ -340,8 +389,10 @@ async function ensureFollow(tab, room){
       const base = room;
       if(!ex.includes(base) && !ex.includes(tag)){ ex.unshift(tag); fs.writeFileSync(ff, ex.slice(0,200).join('\n')); }
     }catch(e){}
-    return {ok, reason: ok?(v.done?'now-followed':'btn-gone'):'clicked-unverified', btn:b};
-  }catch(e){ return {ok:false, reason:String(e.message).slice(0,40)}; }
+    // inconclusive：探针异常 / 页面未加载好，不能当作「关注失败」来处理
+    const inconclusive = !!(v && v.inconclusive);
+    return {ok, inconclusive, reason: ok?(v.how||'now-followed'):(inconclusive?'page-loading':'clicked-unverified'), btn:b};
+  }catch(e){ return {ok:false, inconclusive:true, reason:String(e.message).slice(0,40)}; }
 }
 
 /**
@@ -657,24 +708,25 @@ async function tryJoin(tab,f,url,online){
         return out;
       }
       // 🎯 有参与条件但不是粉丝团 → 大概率是「关注主播」型福袋
-      // 先点关注，再重新找参与按钮
+      // ⚠ 2026-11-05：抢前已在干净页面关注过（见主循环 pre-follow），此处面板已打开、
+      //    全屏遮罩会挡住左上角关注按钮，ensureFollow 必然 no-btn。
+      //    旧逻辑 fr.ok=false 就直接 return need-follow 放弃，今日 4 个福袋因此丢失。
+      //    修法与粉丝团分支一致：验证失败 ≠ 参与失败，不论如何都重扫参与按钮。
       const room=url.split('/').pop();
       const fr=await ensureFollow(tab, room);
-      // 记录详细原因：no-btn（可能已关注） / probe-fail / clicked-unverified / already
-      // 2026-11-04 起按钮消失也算成功，所以 no-btn 其实是好消息
       out.steps.push('cond-follow:'+(fr.ok?'ok('+fr.reason+')':'fail('+fr.reason+')'));
-      if(fr.ok){
-        await sleep(2500);
-        const b2=await pSearch(tab,'一键发评论参与福袋');
-        if(b2.cnt>0){btn=b2;out.steps.push('follow-then-btn');break;}
-        const b3=await pSearch(tab,'参与福袋');
-        if(b3.cnt>0){btn=b3;out.steps.push('follow-then-any');break;}
-      }else{
-        // headless 关注点击会被平台静默丢弃，这类福袋抢不到。
-        // 明确标记 need-follow 而不是混进 no-panel，便于统计损失并加入待关注清单
-        out.result='need-follow';
-        return out;
-      }
+      await sleep(2500);
+      const b2=await pSearch(tab,'一键发评论参与福袋');
+      if(b2.cnt>0){btn=b2;out.steps.push('follow-then-btn');break;}
+      const b3=await pSearch(tab,'参与福袋');
+      if(b3.cnt>0){btn=b3;out.steps.push('follow-then-any');break;}
+      // 面板可能被关注动作顶掉：重开一次再扫
+      try{
+        await clickXY(tab, cx, cy); await sleep(2500);
+        const b4=await pSearch(tab,'一键发评论参与福袋');
+        if(b4.cnt>0){btn=b4;out.steps.push('follow-reopen-btn');break;}
+      }catch(e){}
+      if(!fr.ok && !fr.inconclusive){ out.result='need-follow'; return out; }
       break;
     }
   }
@@ -1640,11 +1692,37 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
               let ex=[]; try{ ex=fs.readFileSync(vf,'utf8').trim().split('\n').filter(Boolean); }catch(e){}
               if(!ex.includes(g.room)){ ex.unshift(g.room); fs.writeFileSync(vf, ex.slice(0,20).join('\n')); }
             }catch(e){}
+            let r=null;   // ⚠ 必须在抢前关注门禁之前声明：门禁分支会写 r，
+                          //    若声明在后面会触发 TDZ ReferenceError，被外层 catch 吞掉丢掉整轮福袋。
+            // 📌 2026-11-05 用户定稿「抢福袋前都需要先关注主播」。
+            //    关注必须放在 tryJoin「之前」：福袋面板是全屏遮罩，打开后左上角
+            //    关注按钮被遮住，elementFromPoint 命中不到 → 历史 73 次关注 71 次失败。
+            //    此刻刚识别到福袋、面板还没开、页面干净，实测 3/4 能点上且持久。
+            //    门禁由 data/follow-config.json 控制：关注成功或已关注才允许抢；
+            //    页面未加载好（inconclusive）时按 allowInconclusive 放行，避免加载慢就停摆。
+            //    关注状态一律看当前页面 DOM，不读全局 followed-rooms.txt（天然按账号正确）。
+            let _followPass=true;
+            if(FOLLOW_ENABLED){
+              const _fr=await ensureFollow(tab,g.room);
+              // ⚠ 保留「关注主播:」字样：web/server.mjs 的 followTry/followOk 靠这个正则统计，
+              //    改日志文案会让看板「关注能力」卡片归零。
+              log(`  📌 关注主播: ${_fr.ok?'✅'+_fr.reason:'❌'+_fr.reason}${_fr.inconclusive?'(不确定)':''} (抢前)`);
+              if(!_fr.ok && FOLLOW_GATE){
+                _followPass = _fr.inconclusive && FOLLOW_ALLOW_INCONCLUSIVE;
+                if(!_followPass){
+                  // 复用现有 need-follow 结果，看板/报表/CSV 映射无需改动
+                  r={url:`https://live.douyin.com/${g.room}`,online:d.online,cd:(d.fudai||{}).cd,
+                     result:'need-follow',steps:['pre-follow:'+(_fr.reason||'fail')]};
+                  rec(r);
+                  await updateAnchor(g.room, (rooms.find(x=>x.room===g.room)||{}).host||'', r.result, new Date().toISOString());
+                  log('结果:',r.result,'|',JSON.stringify(r.steps));
+                }
+              }
+            }
             // 多个福袋依次尝试（20:48 吕德华实测同屏 2 个：05:34 和 09:50）
             // 先抢剩余时间短的；第一个成功就停，避免无谓点击。
             const _all=(Array.isArray(d.fudaiAll)&&d.fudaiAll.length)?d.fudaiAll:[d.fudai];
-            let r=null;
-            for(let _i=0;_i<_all.length;_i++){
+            if(_followPass) for(let _i=0;_i<_all.length;_i++){
               const _f=_all[_i];
               if(_i>0) log(`  ↪ 尝试第 ${_i+1} 个福袋（剩余 ${_f.sec}s）`);
               r=await tryJoin(tab,_f,`https://live.douyin.com/${g.room}`,d.online);
@@ -1670,17 +1748,10 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
               }
             }catch(e){}
 
-            // 📌 参与成功后关注该主播——只关注真正发福袋的（用户要求：经常发福袋的才关注）
-            if(r.result==='joined'||r.result==='maybe-joined'){
-              try{
-                let followed=[];
-                try{ followed=fs.readFileSync(ROOT+'/scripts/followed-rooms.txt','utf8').trim().split('\n').filter(Boolean); }catch(e){}
-                if(!followed.some(x=>x===g.room||x===g.room+':uncertain')){
-                  const fr=await ensureFollow(tab,g.room);
-                  log(`  📌 关注主播: ${fr.ok?'✅'+fr.reason:'❌'+fr.reason}`);
-                }
-              }catch(e){}
-            }
+            // 📌 2026-11-05 起「参与成功后关注」已删除：
+            //    关注改为抢福袋「之前」在主循环做（pre-follow），此处再做一次纯属冗余；
+            //    且它读全局 followed-rooms.txt 会跨账号误判、面板遮罩下必然失败，
+            //    历史上正是那 71 次失败日志的来源。
             // 🚪 连续粉丝团型 ≥5 次 → 该房间偏好粉丝团，提前换房
             if(r.result==='skip-fans'){
               fansStreak++;

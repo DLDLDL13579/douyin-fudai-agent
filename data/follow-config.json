@@ -1,0 +1,6 @@
+{
+ "enabled": true,
+ "requireFollowBeforeJoin": true,
+ "allowInconclusive": true,
+ "note": "2026-11-05 用户定稿「抢福袋前都需要先关注主播」。关注必须在 tryJoin 打开福袋面板之前做：面板是全屏遮罩，会挡住左上角关注按钮的 elementFromPoint 命中，实测 73 次关注 71 次失败几乎全因此。requireFollowBeforeJoin=true 表示关注成功或已关注才允许抢；allowInconclusive=true 表示页面未加载好的不确定情形仍放行抢，避免加载慢就丢福袋导致系统停摆。关注状态一律以当前页面 DOM 为准，不信全局 followed-rooms.txt，天然按账号正确。"
+}
