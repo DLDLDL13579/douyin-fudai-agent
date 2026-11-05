@@ -44,32 +44,37 @@ DY_ALIVE_LOG="$LOG_PATH" node -e "
       prev=len;
       await nap(1800);
     }
-    // 🔴 服务端判定会话失效：Cookie 字段齐全且有效期很长也可能已经掉线。
+    // 🔴 服务端判定会话失效（硬判据，必须排最前、不受任何豁免）：
     //    2026-11-05 09:29 实测 main2：sessionid/sid_tt/uid_tt 全在、expires 到 2027 年，
     //    但页面显示「需先登录，才能开始聊天」、无评论输入框、福袋图标不下发，
     //    check-alive 却因 Cookie 齐全一直报 OK，导致盲跑 5 小时。
-    //    这一条必须排在 Cookie 判定之前，且不受守候浮层豁免。
+    //    真掉线必然带 needLogin 文案，所以把它留在最前面兜底，守候豁免不会漏放。
     if(needLogin){ console.log('LOGIN_EXPIRED needLogin=true (Cookie 齐全但服务端已判会话失效，需重新扫码)'); ws.close(); process.exit(2); }
     if(miss.length){ console.log('LOGIN_EXPIRED missing='+miss.join(',')); process.exit(2); }
-    // 页面已稳定渲染但既无评论输入框，属于登录态可疑（守候浮层另走下面的豁免）
-    if(stable && commentBox===0 && len>350){ console.log('LOGIN_SUSPECT no-comment-box len='+len+' (页面正常但无评论框，疑似未登录)'); ws.close(); process.exit(2); }
 
-    // 🎯 守候开奖期间页面被开奖浮层占满，innerText 必然变短（实测 600+ → 105），
-    //    这恰恰说明系统正常工作。此时不能再用页面长度判断，直接看日志状态。
-    //    2026-11-03 22:57 连续 3 次误报 SUSPECT_SHORT_PAGE 就是踩了这个。
-    //    ⚠ 但 len<60 是空页面「直播加载中」，绝不属于守候浮层，不能被豁免。
-    //      2026-11-05 02:57 的 9751 假 OK 正是这个漏洞。
+    // 🎯 守候开奖期间页面被福袋/开奖浮层占满：innerText 变短、评论输入框被临时移除，
+    //    这恰恰说明系统正常工作。⚠ 这一条必须排在 LOGIN_SUSPECT 之前：
+    //    2026-11-05 14:57 巡检实测守候中 len=2049、commentBox=0，旧顺序先判
+    //    「无评论框 → 登录态可疑」，连报两次 LOGIN_SUSPECT；而直接 CDP 查
+    //    needLogin=false、有评论框、Cookie 三项齐全、福袋图标 LM=1，是纯误报。
+    //    commentBox 是软判据（浮层/商品页/导航都会让它为 0），needLogin 才是硬判据。
+    //    ⚠ len<60 是空页面「直播加载中」，绝不能被豁免（02:57 的 9751 假 OK 漏洞）。
+    let isDrawing=false;
     if(len>=60){
       try{
         const fs=require('fs');
         const logPath=process.env.DY_ALIVE_LOG;
         const tail=fs.readFileSync(logPath,'utf8').split('\n').filter(Boolean).slice(-6).join('\n');
-        if(/守候开奖中|守候开奖 \d+s/.test(tail)){
-          console.log('OK len='+len+' (守候开奖中，页面被开奖浮层占满属正常)');
-          ws.close(); return;
-        }
+        isDrawing=/守候开奖中|守候开奖 \d+s/.test(tail);
       }catch(e){}
     }
+    if(isDrawing){
+      console.log('OK len='+len+' (守候开奖中，页面被开奖浮层占满属正常)');
+      ws.close(); return;
+    }
+
+    // 非守候态：页面已稳定渲染却既无评论输入框，才判登录态可疑
+    if(stable && commentBox===0 && len>350){ console.log('LOGIN_SUSPECT no-comment-box len='+len+' (页面正常但无评论框，疑似未登录)'); ws.close(); process.exit(2); }
     // 重测 8 次累计约 13 秒仍未稳定 → 才认为页面真的有问题
     if(!stable && len<60){ console.log('EMPTY_PAGE len='+len+' (重测 13 秒仍为空，标签可能卡死)'); process.exit(5); }
     if(!stable && len>=60 && len<350){ console.log('SUSPECT_SHORT_PAGE len='+len+' (cookie 在但页面 13 秒未渲染完成)'); process.exit(3); }
