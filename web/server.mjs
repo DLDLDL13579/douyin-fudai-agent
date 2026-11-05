@@ -250,40 +250,52 @@ function instancesInfo(procs, todayRowsByAcc) {
 }
 
 /**
- * 执行能力统计：粉丝团加入、关注主播的实际成功率。
+ * 执行能力统计：粉丝团加入、关注主播的「今日真实到位」次数。
  *
- * 为什么需要：用户明确要求「需要关注的你得关注，需要粉丝团的你得加入粉丝团」，
- * 但看板原来只显示福袋参与率，看不到这两件事到底做成没有。
- * 加入粉丝团要花 1 钻，失败多了就是白花钱，必须可见。
+ * 2026-11-05 14:10 口径重构（用户指出「数据不真实、要真实到位」）：
+ *   旧版用日志正则统计，但 h35.log 跨天复用、149 次启动、无日期字段，
+ *   且 fans-join:joinBtn（参与按钮就位、加入未确认）被当成成功 →
+ *   显示 24/28 86% 却 0 钻，自相矛盾；关注 19/91 是历史累计而非今日。
+ *   改为读 data/exec-actions.jsonl（每条带 at/account/action/ok），按本地日过滤。
+ *   文件不存在时全部为 0，不补造历史 —— 0 就是 0，真实优先于好看。
  *
- * 数据来源：日志里的固定标记 + coin-spend.jsonl
+ * 口径：今日 00:00 起（本地时区），粉丝团只认 ok=true（验证通过才算真加入）。
  */
 function execStats() {
-  const out = { fansTry:0, fansOk:0, fansFail:0, followTry:0, followOk:0, followFail:0, coins:0, wins:0, losses:0 };
-  try {
-    const txt = fs.readFileSync(PATHS.log, 'utf8');
-    out.fansTry   = (txt.match(/fans-try\(|big-room-fans\(/g) || []).length;
-    out.fansOk    = (txt.match(/fans-join:(ok|joinBtn)/g) || []).length;
-    out.fansFail  = (txt.match(/fans-join:fail:/g) || []).length;
-    out.followTry = (txt.match(/关注主播:/g) || []).length;
-    out.followOk  = (txt.match(/关注主播: ✅/g) || []).length;
-    out.followFail= out.followTry - out.followOk;
-  } catch {}
-  // 开奖结果：中奖 / 未中奖（2026-11-04 新增，之前只记中奖导致无从判断效果）
-  try {
-    const w = path.join(ROOT, 'data', 'wins.jsonl');
-    const l = path.join(ROOT, 'data', 'losses.jsonl');
-    out.wins   = fs.existsSync(w) ? fs.readFileSync(w,'utf8').split('\n').filter(Boolean).length : 0;
-    out.losses = fs.existsSync(l) ? fs.readFileSync(l,'utf8').split('\n').filter(Boolean).length : 0;
-  } catch { out.wins = 0; out.losses = 0; }
+  const out = { fansTry:0, fansOk:0, fansFail:0, followTry:0, followOk:0, followFail:0,
+                followUnknown:0, coins:0, wins:0, losses:0 };
+  const today = localDay();
+  const rows = (file) => {
+    try {
+      const p = path.join(ROOT, 'data', file);
+      if (!fs.existsSync(p)) return [];
+      return fs.readFileSync(p, 'utf8').split('\n').filter(Boolean)
+        .map((l) => { try { return JSON.parse(l); } catch { return null; } })
+        .filter(Boolean);
+    } catch { return []; }
+  };
 
-  // 抖币消耗：只有粉丝团真正加入成功才记账
-  try {
-    const sp = path.join(ROOT, 'data', 'coin-spend.jsonl');
-    if (fs.existsSync(sp)) {
-      out.coins = fs.readFileSync(sp, 'utf8').split('\n').filter(Boolean).length;
+  // 粉丝团 / 关注：只认带 at 的真实记账
+  for (const r of rows('exec-actions.jsonl')) {
+    if (!isLocalDay(r.at, today)) continue;
+    if (r.action === 'fans') {
+      out.fansTry++;
+      if (r.ok) out.fansOk++; else out.fansFail++;
+    } else if (r.action === 'follow') {
+      out.followTry++;
+      if (r.ok) out.followOk++;
+      else if (r.state === 'inconclusive') out.followUnknown++;
+      else out.followFail++;
     }
-  } catch {}
+  }
+
+  // 开奖结果：同样改今日口径，避免与「今日战绩」混用两套时间范围
+  out.wins   = rows('wins.jsonl').filter((r) => isLocalDay(r.at, today)).length;
+  out.losses = rows('losses.jsonl').filter((r) => isLocalDay(r.at, today)).length;
+
+  // 抖币消耗：只统计今日真正加入成功（ok=true 才写），与粉丝团成功率同源
+  out.coins = rows('coin-spend.jsonl')
+    .filter((r) => isLocalDay(r.at, today) && (r.coins || 0) > 0).length;
   return out;
 }
 
@@ -867,7 +879,7 @@ const HTML = `<!DOCTYPE html>
   </div>
 
   <div class="card">
-    <h2>学习 · 结果分布 · 房间排行</h2>
+    <h2>学习(累计) · 执行结果(今日) · 房间排行</h2>
     <div class="scroll split2">
       <div id="learning"></div>
       <div>
@@ -1052,12 +1064,14 @@ async function tick(){
             (fansRate !== null ? '<span class="dim"> ' + fansRate + '%</span>' : '') + '</span></div>' +
           '<div class="row"><span>⭐ 关注</span><span>' +
             '<span class="' + cls(folRate) + '">' + e.followOk + '/' + e.followTry + '</span>' +
-            (folRate !== null ? '<span class="dim"> ' + folRate + '%</span>' : '') + '</span></div>' +
+            (folRate !== null ? '<span class="dim"> ' + folRate + '%</span>' : '') +
+            (e.followUnknown ? '<span class="dim"> · 未确认 ' + e.followUnknown + '</span>' : '') + '</span></div>' +
           '<div class="row"><span>🎲 开奖结果</span><span>' +
             '<span class="ok">中 ' + (e.wins||0) + '</span>' +
             '<span class="dim"> / 未中 ' + (e.losses||0) + '</span></span></div>' +
           '<div class="row"><span>抖币消耗</span><span class="' + (e.coins ? 'warn' : 'dim') + '">' +
-            e.coins + ' 钻</span></div>';
+            e.coins + ' 钻</span></div>' +
+          '<div class="row" style="opacity:.6;font-size:10px"><span>以上为今日真实到位</span><span></span></div>';
       }
     }
 

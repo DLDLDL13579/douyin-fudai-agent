@@ -153,6 +153,19 @@ const rec=(o)=>{
   // 无法按账号过滤、只能整文件统计，和全局 participations 口径打架。
   try{ fs.appendFileSync(RES, JSON.stringify({...o,account:ACCOUNT_TAG,at:now})+'\n'); }catch{}
 };
+// ── 执行能力真实记账（2026-11-05 14:10）─────────────────────
+// 看板原先用日志正则统计「粉丝团/关注成功率」，但日志跨天复用、无日期字段，
+// 且 fans-join:joinBtn（参与按钮就位）被当成加入成功，导致 24/28 86% 却 0 钻。
+// 改为 append 到 data/exec-actions.jsonl，每条带 at/account/room/action/ok，
+// 看板按本地日过滤，只认「真实到位」的事件。文件不存在时视为 0，不补造历史。
+const EXEC_ACTIONS=DATA_DIR+'/exec-actions.jsonl';
+const recExec=(action, ok, extra={})=>{
+  try{
+    fs.appendFileSync(EXEC_ACTIONS, JSON.stringify({
+      at:new Date().toISOString(), account:ACCOUNT_TAG, action, ok:!!ok, ...extra
+    })+'\n');
+  }catch{}
+};
 // ── 主播档案（自主进化的数据基础）──────────────────────────
 // 记录每个房间的福袋规律：总次数、可抢/粉丝团比例、按小时的分布。
 // 后续策略会据此判断「这个主播在这个时段是否常发福袋」，让选择越来越准。
@@ -286,7 +299,10 @@ const SCAN=`(()=>{
 // 📌 自动关注主播（2026-11-05 起：抢福袋「之前」调用，页面干净无遮罩）
 //    返回值新增 inconclusive：页面尚未加载好，此时不能判定「没关注」，
 //    否则会把加载慢误当风控拦截而丢掉福袋。
-async function ensureFollow(tab, room){
+//    ⚠ 真实记账在下方包装函数 ensureFollow 里统一做：原先看板靠日志正则统计，
+//      跨天复用 + 旧探针 no-btn 误判，91 次里大部分是历史噪声。改成 append 到
+//      exec-actions.jsonl，带 at/account，看板按本地日过滤，只认真实到位。
+async function _ensureFollowImpl(tab, room){
   try{
     // 🔑 用 elementFromPoint 扫描左上角，找 BUTTON（关注按钮 innerText 含快捷键，不能精确匹配）
     //    ⚠ 2026-11-05 干净对照实测：抖音「已关注」的真实表现是左上角变成「+加粉丝团」，
@@ -393,6 +409,18 @@ async function ensureFollow(tab, room){
     const inconclusive = !!(v && v.inconclusive);
     return {ok, inconclusive, reason: ok?(v.how||'now-followed'):(inconclusive?'page-loading':'clicked-unverified'), btn:b};
   }catch(e){ return {ok:false, inconclusive:true, reason:String(e.message).slice(0,40)}; }
+}
+
+// 📊 统一出口记账：所有 return 分支都覆盖，且不改动原返回值。
+//    ok=true 记成功；inconclusive 记「不确定」（页面未加载好，不算失败也不算成功）；
+//    ok=false 且非不确定才记失败。room 从参数取，天然按账号隔离。
+async function ensureFollow(tab, room){
+  const r = await _ensureFollowImpl(tab, room);
+  recExec('follow', !!r.ok, {
+    room,
+    state: r.ok ? (r.reason||'ok') : (r.inconclusive ? 'inconclusive' : (r.reason||'fail'))
+  });
+  return r;
 }
 
 /**
@@ -570,18 +598,25 @@ async function joinFansGroup(tab){
       if(b.cnt>0){ log('    关弹窗后发现参与按钮，交回参与流程'); hasJoinBtn=true; }
     }
 
-    // 💰 消费记录：用户已授权使用抖币加入粉丝团，这里把每次加入都记下来便于核对
+    // 💰 消费记录：用户已授权使用抖币加入粉丝团，这里把每次加入都记下来便于核对。
+    //    ⚠ 只有 ok（验证读到「已加入/点亮成功」）才记账：hasJoinBtn 只是参与按钮
+    //      就位、加入未确认，不能算消费、也不能算成功。2026-11-05 实测历史 24 次
+    //      「成功」全是 joinBtn、真加入 0 次，所以 coin-spend.jsonl 一直是 0 钻。
+    const room=(typeof CURRENT_ROOM!=='undefined')?CURRENT_ROOM:'';
     if(ok){
       try{
-        const spendFile=DATA_DIR+'/coin-spend.jsonl';
-        const now=new Date().toISOString();
-        const room=(typeof CURRENT_ROOM!=='undefined')?CURRENT_ROOM:'';
-        fs.appendFileSync(spendFile, JSON.stringify({
-          at:now, room, action:'join-fans-group', coins:1, note:'加入粉丝团（可能消耗1抖币）'
+        fs.appendFileSync(DATA_DIR+'/coin-spend.jsonl', JSON.stringify({
+          at:new Date().toISOString(), account:ACCOUNT_TAG, room,
+          action:'join-fans-group', coins:1, note:'加入粉丝团（验证通过，消耗1抖币）'
         })+'\n');
         log('    💰 已记录加入粉丝团消费: 1 抖币');
       }catch(e){}
     }
+    // 📊 执行能力真实记账：区分「验证通过」「参与按钮就位但未确认」「确认失败」
+    recExec('fans', ok, {
+      room,
+      state: ok ? 'verified' : (hasJoinBtn ? 'joinBtn' : (noCoins ? 'no-coins' : 'unverified'))
+    });
     return {ok, hasJoinBtn, noCoins, why: (ok||hasJoinBtn)?'done':(noCoins?'no-coins':'unverified')};
   }catch(e){ return {ok:false, hasJoinBtn:false, noCoins:false, why:String(e.message).slice(0,30)}; }
 }
