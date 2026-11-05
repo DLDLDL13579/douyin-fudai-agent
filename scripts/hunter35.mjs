@@ -112,6 +112,46 @@ function getMinOnline(){
   const isNight = (h>=NIGHT_START && h<NIGHT_END);
   return isNight ? MIN_ONLINE_NIGHT : MIN_ONLINE_DAY;
 }
+
+// ── 🧠 策略可观测性底座（2026-11-05 21:17）────────────────────────
+//    设计目标：让系统「看见自己」，回答三个以前答不了的问题：
+//      1. 这次决策发生在哪套参数下？→ policyId / policy 快照
+//      2. 这次决策花了多少时间、换来什么？→ decisionId 贯穿 + 耗时字段
+//      3. 有没有更优选择被我放弃？→ gateSkipped 记录反事实线索
+//    ⚠ 严格只读观测：本段不写任何配置文件、不改任何判定分支、不 return 值给决策逻辑。
+//      所有写入用 append + try/catch，写失败绝不影响 7×24 主循环。
+const POLICY_SNAPSHOT={
+  threshold:{day:MIN_ONLINE_DAY,night:MIN_ONLINE_NIGHT,nightStart:NIGHT_START,nightEnd:NIGHT_END,vipExempt:VIP_EXEMPT},
+  wait:{scale:WS,drawBufferSec:DRAW_BUF,drawMaxSec:DRAW_MAX,drawFallbackSec:DRAW_FALLBACK,postDrawWaitSec:POST_DRAW_MS/1000},
+  follow:{enabled:FOLLOW_ENABLED,gate:FOLLOW_GATE,allowInconclusive:FOLLOW_ALLOW_INCONCLUSIVE,
+          verifyRetryMs:VERIFY_RETRY_MS,retryCooldownMs:RETRY_COOLDOWN_MS},
+  packet:{detect:PACKET_DETECT,grab:PACKET_GRAB}
+};
+// 参数指纹：配置一变 policyId 就变，报告可按它分组对比不同策略期的表现。
+// 用 crypto 稳定哈希，不依赖对象键序。
+const POLICY_ID=(()=>{
+  try{
+    const s=JSON.stringify(POLICY_SNAPSHOT);
+    let h=2166136261;
+    for(let i=0;i<s.length;i++){ h^=s.charCodeAt(i); h=Math.imul(h,16777619); }
+    return (h>>>0).toString(16).padStart(8,'0');
+  }catch(e){ return 'unknown'; }
+})();
+let _decisionSeq=0;
+const newDecisionId=()=>`${Date.now().toString(36)}-${(++_decisionSeq).toString(36)}-${ACCOUNT_TAG}`;
+// gate-skip 去重：roomStayId -> 上次记录的「房间+倒计时」。限容 300，避免 7×24 无限增长。
+const _gateLogged=new Map();
+// 唯一写入口。ev 为事件类型，p 为业务字段；公共字段自动补齐。
+const recStrategy=(ev,p)=>{
+  try{
+    fs.appendFileSync(STRATEGY_LOG, JSON.stringify({
+      at:new Date().toISOString(), account:ACCOUNT_TAG, ev,
+      policyId:POLICY_ID,
+      hour:new Date().getHours(),
+      ...p
+    })+'\n');
+  }catch(e){}
+};
 // 🎯 房间优先级打分：游戏/娱乐类更爱发福袋，带货类几乎不发
 const GAME_PAT = /游戏|电竞|金铲铲|王者|和平精英|三角洲|PUBG|LOL|英雄联盟|教学|对局|排位|上分|吃鸡|蛋仔|原神|第五人格|炉石|CSGO|CF|云顶|阵容|主播|李白|韩信|貂蝉|鲁班|妲己|孙悟空|亚索|德玛|无畏契约|瓦罗兰特|APEX|守望|DOTA|星际|魔兽|梦幻西游|西游|三国|传奇|跑跑|飙车|赛车|拳皇|街霸|铁拳|真人快打|任天堂|马里奥|塞尔达|宝可梦|怪物猎人|艾尔登|黑神话|只狼|鬼泣|生化危机|使命召唤|战地|彩虹六号|塔科夫|暗区突围|永劫无间|幻兽帕鲁|米哈游|崩坏|绝区零|鸣潮|明日方舟|碧蓝|fgo|阴阳师|部落冲突|皇室战争|万国觉醒|率土之滨|三国志|少年三国|剑与远征|闪烁之光|石器时代|大话西游|问道|天龙八部|剑网|天涯明月刀|逆水寒|古剑|仙剑|倩女幽魂|完美世界|诛仙|斗罗|斗破|吞噬星空|遮天|完美世界|雪鹰领主|武动乾坤|大主宰|元尊/i;
 const GAME_STRONG_PAT = /金铲铲|云顶|王者荣耀|和平精英|三角洲行动|英雄联盟|无畏契约|永劫无间|CSGO|DOTA|APEX|PUBG|蛋仔派对|第五人格|原神|崩坏|绝区零|鸣潮/i;
@@ -162,6 +202,12 @@ const WINS=DATA_DIR+'/wins.jsonl';
 // 未中奖记录（2026-11-04 新增）。原来只记 wins，导致 39 次守候 0 条记录，
 // 无法回答「到底中没中」这个最基本的问题。现在中奖/未中奖都留痕。
 const LOSSES=DATA_DIR+'/losses.jsonl';
+// 🧠 策略可观测性底座（2026-11-05 21:17 用户定稿「学习自己的抢福袋策略」）。
+//    纯观测：只追加写 strategy-log.jsonl，不改任何策略参数、不影响决策分支。
+//    解决的核心缺口：participations/losses 没有「当时用哪套参数、这次花了多少时间」，
+//    所以无法计算「单位时间中奖期望」，也无法归因某个时段/房间/参数是否值得。
+//    本文件与 participations 一样属运行时数据，按既有约定不提交 GitHub。
+const STRATEGY_LOG=DATA_DIR+'/strategy-log.jsonl';
 try{ fs.mkdirSync(DATA_DIR,{recursive:true}); }catch{}
 const ACCOUNT_TAG=ACCOUNT||'default';
 const rec=(o)=>{
@@ -1663,6 +1709,18 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
         log(`📊 候选质量 均分 ${avg}，最高 ${top}，强相关房间 ${strong} 个 ｜ 达标 ${pool.length}/${rooms.length} 间 ｜ 本轮盯 ${good.length} 个`);
       }
       log(`选定 ${good.length} 个候选，依次尝试常驻`);
+      // 🧠 策略观测：本轮选房结果。用于回答「选房策略有没有把时间花在高产房」。
+      //    poolAll/poolPass 记录候选池与门槛通过数，是「门槛该不该调」的反事实线索。
+      recStrategy('candidates',{
+        decisionId:newDecisionId(),
+        minOnline:getMinOnline(),
+        poolAll:rooms.length, poolPass:pool.length, picked:good.length,
+        avgScore:good.length?Number((good.reduce((t,x)=>t+x.score,0)/good.length).toFixed(1)):0,
+        topScore:good.length?Math.max(...good.map(x=>x.score)):0,
+        strongN:good.filter(x=>x.score>=8).length,
+        vipN:good.filter(x=>x.isVip).length,
+        rooms:good.map(x=>({room:x.room,online:x.online,score:x.score,isVip:!!x.isVip}))
+      });
 
       // 依次常驻：VIP 房（已验证发福袋）多等，普通房快扫换人
       // 提高覆盖密度——原来固定 10 分钟/房，一轮 5 房要 50 分钟，太慢
@@ -1683,6 +1741,16 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
         const perMs=highYield ? Math.round(WS*_WAIT.highYieldMs) : (g.isVip ? Math.round(WS*Math.max(_WAIT.vipMinMs, perMsBase/WS)) : perMsBase);
         log('');
         log(`=== 常驻 ${disp(g.room)}（在线${g.online}${g.isVip?' VIP':''}${highYield?` 🏆高频发袋(${new Date().getHours()}点历史${thisHourCnt}次)`:''}）${perMs/1000}秒 ===`);
+        // 🧠 策略观测：房间时间投入的起点。roomStayId 与结束事件配对，
+        //    得到「在这间房花了多少秒」，是单位时间中奖期望的分母。
+        const roomStayId=newDecisionId();
+        const roomT0=Date.now();
+        recStrategy('room-enter',{
+          decisionId:roomStayId, room:g.room, online:g.online,
+          score:g.score, isVip:!!g.isVip, highYield:!!highYield,
+          plannedStaySec:Math.round(perMs/1000), minOnline:getMinOnline(),
+          hourHistFudai:thisHourCnt, visits:(anchors[g.room]||{}).visits||0
+        });
 
         // 📊 记录访问次数：用于计算「发福袋率 = 发现福袋次数 / 被访问次数」。
         //    有些主播人气很高但从不发福袋，只有把它和真正发福袋的主播区分开，
@@ -1811,6 +1879,18 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
             // 硬卡拦截留痕：否则「看见了福袋却不参与」和「根本没福袋」在日志里长得一样，
             // 又变成 11-03 那种「看不见和没有表现一样」的排查黑洞。每 10 次采样打印一次。
             if(dbgCnt%10===1) log(`  ⛔ 门槛硬卡跳过福袋: 在线${d.online} < ${getMinOnline()} ${g.isVip?'[VIP]':''} ${disp(g.room)}`);
+            // 🧠 策略观测：被门槛拦下的福袋是评估「门槛是否过高」的直接反事实证据。
+            //    按房间+倒计时去重，避免每 5 秒扫描写一条把日志撑爆。
+            const gateKey=`${g.room}:${(d.fudai||{}).cd||''}`;
+            if(_gateLogged.get(roomStayId)!==gateKey){
+              _gateLogged.set(roomStayId,gateKey);
+              recStrategy('gate-skip',{
+                decisionId:roomStayId, room:g.room, online:d.online,
+                minOnline:getMinOnline(), isVip:!!g.isVip,
+                cd:(d.fudai||{}).cd||'', secLeft:(d.fudai||{}).sec??-1,
+                reason:'online-below-threshold'
+              });
+            }
           }
           if(d.fudai && onlineOK){
             // 🔑 只在倒计时充足时尝试（实测剩余不足180秒的福袋点不开面板）
@@ -1915,6 +1995,16 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
             // 更新主播档案（记忆：这间房什么时候发过什么类型的福袋）
             await updateAnchor(g.room, (rooms.find(x=>x.room===g.room)||{}).host||'', r.result, new Date().toISOString());
             log('结果:',r.result,'|',JSON.stringify(r.steps));
+            // 🧠 策略观测：参与结果与本次决策配对。joinMs 是「从进房到出结果」的耗时，
+            //    与开奖结果一起构成「单位时间中奖期望」的分子与分母。
+            recStrategy('join-result',{
+              decisionId:roomStayId, room:g.room, online:d.online,
+              result:r.result, steps:r.steps||[],
+              secLeft:(d.fudai||{}).sec??-1, cd:(d.fudai||{}).cd||'',
+              isVip:!!g.isVip, score:g.score, minOnline:getMinOnline(),
+              joinMs:Date.now()-roomT0,
+              followGate:FOLLOW_GATE, packetGrab:PACKET_GRAB
+            });
             // 🔒 去重状态收敛到唯一出口（2026-11-05 18:42 事故修复）：
             //    - joined/maybe-joined：写 12 分钟长窗，清掉短冷却
             //    - packet-skipped：用户定稿「不抢人气红包」，这是终态而非参与失败，
@@ -2031,10 +2121,20 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
                   const _win=!!dr.win;
                   log(_win?'🏆 中奖弹窗:':'📭 未中奖弹窗:', JSON.stringify(dr).slice(0,220));
                   const _rec={account:ACCOUNT_TAG, room:g.room, win:_win,
-                              text:(dr.text||'').slice(0,200), at:new Date().toISOString()};
+                              text:(dr.text||'').slice(0,200), at:new Date().toISOString(),
+                              decisionId:roomStayId, waitedSec:i*5, plannedWaitSec:waitLoops*5};
                   try{
                     fs.appendFileSync(_win?WINS:LOSSES, JSON.stringify(_rec)+'\n');
                   }catch{}
+                  // 🧠 策略观测：开奖结果是「单位时间中奖期望」的分子。
+                  //    decisionId 与 room-enter / join-result 串联，可算出
+                  //    「这间房这次投入了多少秒、换回一次中奖/未中奖」。
+                  recStrategy('draw-result',{
+                    decisionId:roomStayId, room:g.room, win:_win,
+                    waitedSec:i*5, plannedWaitSec:waitLoops*5,
+                    secLeft, online:d.online, isVip:!!g.isVip,
+                    totalStaySec:Math.round((Date.now()-roomT0)/1000)
+                  });
                   if(_win) await shot(tab,`h35-DRAW-${Date.now()}.png`);
                   // 🔴 必须关掉弹窗：实测「没抽中福袋」弹窗会一直挡在屏幕中央，
                   //    不关的话后续换房检测、福袋扫描都会被它遮住。
@@ -2126,6 +2226,16 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
             fs.writeFileSync(DRY_FILE, JSON.stringify(dm));
           }catch(e){}
         }
+        // 🧠 策略观测：房间常驻结束。这是「单位时间」分母的另一端。
+        //    空手房间没有 join-result / draw-result，只有这条能证明「时间花在哪、有没有回报」。
+        //    postDrawRound 记录开奖后循环蹲了几轮，用于评估 postDrawWaitSec 的真实收益。
+        recStrategy('room-exit',{
+          decisionId:roomStayId, room:g.room, online:g.online,
+          isVip:!!g.isVip, score:g.score, minOnline:getMinOnline(),
+          stayedSec:Math.round((Date.now()-roomT0)/1000),
+          hadFudai:!!handled, postDrawRound,
+          plannedStaySec:Math.round(perMs/1000)
+        });
       }
     }
   }catch(e){log('FATAL',e.message);}
