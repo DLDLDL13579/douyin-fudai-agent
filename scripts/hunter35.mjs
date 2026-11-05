@@ -930,9 +930,15 @@ async function checkOnline(tab,room){
 }
 
 // 启动 Chrome
+// ⚠ 2026-11-05 08:04 实测：首版带来的 '--enable-unsafe-swiftshader --use-angle=swiftshader'
+//    在 headless=new 下让 GPU 进程用 CPU 软件光栅化，两个实例各持续吃 260~377% CPU，
+//    load 冲到 13.3、空闲内存掉到 36MB。降载 CSS 只停页面动画，停不了 SwiftShader 合成循环。
+//    受控对照（同一 Chrome、同一分类页，页面均正常渲染 31/32 张房间卡片）：
+//      swiftshader 512% CPU ／ --disable-gpu 19% CPU ／ 默认无参数 33% CPU。
+//    故改用 --disable-gpu：渲染与 DOM 检测能力无损，福袋识别靠 DOM 而非像素。
 try{fs.rmSync(PROFILE+'/SingletonLock',{force:true});}catch(e){}
 const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`--user-data-dir=${PROFILE}`,
- '--no-first-run','--no-default-browser-check','--enable-unsafe-swiftshader','--use-angle=swiftshader',
+ '--no-first-run','--no-default-browser-check','--disable-gpu',
  '--disable-dev-shm-usage','--window-size=1440,900','--mute-audio','--disable-blink-features=AutomationControlled',
  `--user-agent=${UA}`,'--lang=zh-CN','about:blank'],{stdio:'ignore'});
 
