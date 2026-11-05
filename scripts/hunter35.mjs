@@ -96,6 +96,10 @@ try{ _FOLLOW=Object.assign(_FOLLOW, JSON.parse(fs.readFileSync(DATA_DIR+'/follow
 const FOLLOW_ENABLED=!!_FOLLOW.enabled;
 const FOLLOW_GATE=!!_FOLLOW.requireFollowBeforeJoin;
 const FOLLOW_ALLOW_INCONCLUSIVE=!!_FOLLOW.allowInconclusive;
+// 🩺 2026-11-05 18:42 事故增补（单一数据源 follow-config.json）：
+//    点击关注后的二次验证间隔、参与失败后的短冷却。二者都带上下限钳制，配置异常不会卡死主循环。
+const VERIFY_RETRY_MS=Math.max(0,Math.min(20000,Number(_FOLLOW.verifyRetryMs)||0));
+const RETRY_COOLDOWN_MS=Math.max(0,Math.min(600000,Number(_FOLLOW.retryCooldownMs)||0));
 function getMinOnline(){
   const h=new Date().getHours();
   // 晚间 19:00-24:00 用高门槛，凌晨 0-6 点按白天算（人少但仍在播）
@@ -225,7 +229,12 @@ async function updateAnchor(room, host, result, at){
 
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 let dbgCnt=0;   // 采样计数
-const HANDLED_TIME=new Map();   // 房间 -> 上次处理福袋的时间戳（12 分钟内不重复处理）
+const HANDLED_TIME=new Map();   // 房间 -> 上次「成功参与」福袋的时间戳（12 分钟内不重复处理）
+// ⚠ 2026-11-05 18:42 事故：去重记录原本写在「发现福袋」时，早于参与结果。
+//    关注门禁失败后，还在倒计时 6分58秒 的福袋被锁死 12 分钟，日志里 ★★ 福袋 再没出现，
+//    但 [f值检查] 一直 candCount=1。改为「参与成功后才锁」，失败只给 RETRY_COOLDOWN_MS 短冷却。
+//    清理由同一 Map 的 size>300 分支负责，不新增第二个状态容器。
+let _RETRY_AT=new Map();        // 房间 -> 本次尝试失败后允许重试的最早时间戳（短冷却，非去重）
 
 class CDP{constructor(ws){this.ws=ws;this.id=0;this.p=new Map();ws.onmessage=(e)=>{const m=JSON.parse(e.data);if(m.id&&this.p.has(m.id)){const q=this.p.get(m.id);this.p.delete(m.id);m.error?q.rej(new Error(JSON.stringify(m.error))):q.res(m.result);}};}
  send(m,p={},t=25000){const id=++this.id;return new Promise((res,rej)=>{const tm=setTimeout(()=>{this.p.delete(id);rej(new Error('timeout'));},t);this.p.set(id,{res:(v)=>{clearTimeout(tm);res(v);},rej:(e)=>{clearTimeout(tm);rej(e);}});this.ws.send(JSON.stringify({id,method:m,params:p}));});}}
@@ -381,7 +390,11 @@ async function _ensureFollowImpl(tab, room){
     //      ③ 头部出现「加粉丝团」且无独立关注按钮（真实已关注态）
     //      ④ 原「关注」按钮消失
     //    只在页面确实加载好（bodyLen>=200）时才允许判失败，避免加载慢被误判为风控拦截。
-    const v = await ev(tab, `(()=>{
+    // 🩺 2026-11-05 18:42 事故：这个探针原本只跑一次。页面刚「重建标签后加载成功」
+    //    时 UI 还没刷新完，5s 后仍看到「关注」按钮 → clicked-unverified → need-follow，
+    //    福袋还剩 6分58秒 却被整轮放弃。现改为同一探针跑两次（只验证、不重复点击），
+    //    第二次才成功记 recovered-follow；两次都失败才按真风控交给硬门禁拦截。
+    const verifyExpr = `(()=>{
       var b=document.body.innerText||'';
       var len=b.length;
       if(/关注成功/.test(b)) return {done:true, how:'toast', len:len};
@@ -400,10 +413,18 @@ async function _ensureFollowImpl(tab, room){
         var r2=el.getBoundingClientRect();
         if(r2.width>=30 && r2.height>=16 && r2.width<150 && r2.y<130){ still=true; break; }
       }
-      if(/加粉丝团/.test(head) && !still) return {done:true, how:'fans-group-state', len:len};
-      if(len<200) return {done:false, how:'page-loading', len:len, inconclusive:true};
-      return {done:!still, how: still?'still-there':'btn-gone', len:len};
-    })()`, 20000);
+      if(/加粉丝团/.test(head) && !still) return {done:true, how:'fans-group-state', len:len, still:false, head:head.slice(0,80)};
+      if(len<200) return {done:false, how:'page-loading', len:len, still:still, head:head.slice(0,80), inconclusive:true};
+      return {done:!still, how: still?'still-there':'btn-gone', len:len, still:still, head:head.slice(0,80)};
+    })()`;
+    let v = await ev(tab, verifyExpr, 20000);
+    let recoveredOnRetry=false;
+    if((!v || !v.done) && VERIFY_RETRY_MS>0 && !v.__err){
+      await sleep(VERIFY_RETRY_MS);
+      const v2 = await ev(tab, verifyExpr, 20000);
+      if(v2 && !v2.__err && v2.done){ v=v2; recoveredOnRetry=true; }
+      else if(v2 && !v2.__err){ v=v2; }   // 二次仍失败，用最新的 DOM 诊断
+    }
     const ok = !!(v && v.done);
     // 无论验证结果都记入已尝试（避免反复点击同一主播）
     try{
@@ -415,8 +436,18 @@ async function _ensureFollowImpl(tab, room){
     }catch(e){}
     // inconclusive：探针异常 / 页面未加载好，不能当作「关注失败」来处理
     const inconclusive = !!(v && v.inconclusive);
-    return {ok, inconclusive, reason: ok?(v.how||'now-followed'):(inconclusive?'page-loading':'clicked-unverified'), btn:b};
-  }catch(e){ return {ok:false, inconclusive:true, reason:String(e.message).slice(0,40)}; }
+    // 诊断字段：verifyHow / still / bodyLen / head 写入 exec-actions.jsonl，
+    // 下次能区分「页面没稳、UI 刷新慢」与「关注请求被服务端静默丢弃」，不再靠猜。
+    const diag={
+      verifyHow:(v&&v.how)||'probe-fail',
+      still:(v&&typeof v.still==='boolean')?v.still:null,
+      bodyLen:(v&&typeof v.len==='number')?v.len:null,
+      head:(v&&v.head)||null,
+      retryRecovered:recoveredOnRetry
+    };
+    return {ok, inconclusive, diag,
+      reason: ok?(recoveredOnRetry?'recovered-follow':(v.how||'now-followed')):(inconclusive?'page-loading':'clicked-unverified'), btn:b};
+  }catch(e){ return {ok:false, inconclusive:true, diag:{verifyHow:'exception',err:String(e.message).slice(0,80)}, reason:String(e.message).slice(0,40)}; }
 }
 
 // 📊 统一出口记账：所有 return 分支都覆盖，且不改动原返回值。
@@ -426,7 +457,8 @@ async function ensureFollow(tab, room){
   const r = await _ensureFollowImpl(tab, room);
   recExec('follow', !!r.ok, {
     room,
-    state: r.ok ? (r.reason||'ok') : (r.inconclusive ? 'inconclusive' : (r.reason||'fail'))
+    state: r.ok ? (r.reason||'ok') : (r.inconclusive ? 'inconclusive' : (r.reason||'fail')),
+    ...(r.diag||{})
   });
   return r;
 }
@@ -1701,6 +1733,7 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
           //    重复抢比漏一轮更糟。真出现「无缝衔接」时本轮自然到期换房，下一轮重进仍会扫到新福袋。
           if(postDrawUnlockPending && (d.candCount||0)===0){
             HANDLED_TIME.delete(g.room);
+            _RETRY_AT.delete(g.room);   // 同步清短冷却，否则上一轮的残留会挡住新一轮福袋
             postDrawUnlockPending=false;
             log('  🔁 旧福袋图标已消失，去重已解锁，等待新一轮福袋');
           }
@@ -1737,13 +1770,23 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
             //    5 个 <12 分钟，旧逻辑会把它们全部静默吞掉。
             //    用「开奖完成」而不是「倒计时回升」作分界：新一轮福袋倒计时可能更短，
             //    「回升」判据会漏掉它；而开奖后旧福袋的 DOM 已消失，不会重复抢同一个。
+            // 🔒 2026-11-05 18:42 事故修复：12 分钟去重只在「成功参与」后写（见下方 joined 分支）。
+            //    这里只查两道闸：成功参与后的 12 分钟长窗、以及本次失败后的短冷却。
+            //    失败不再锁死还在倒计时的福袋，冷却到期即可重试同一个福袋。
             const lastTs=HANDLED_TIME.get(g.room)||0;
             if(Date.now()-lastTs < 12*60*1000){
               await sleep(2000); continue;
             }
-            HANDLED_TIME.set(g.room, Date.now());
-            // 清理过期的房间记录
-            if(HANDLED_TIME.size>300){ const nowTs=Date.now(); for(const [k,v] of HANDLED_TIME){ if(nowTs-v>15*60*1000) HANDLED_TIME.delete(k); } }
+            const retryAt=_RETRY_AT.get(g.room)||0;
+            if(Date.now()<retryAt){
+              await sleep(2000); continue;
+            }
+            // 清理过期的房间记录（HANDLED_TIME 与短冷却一起收，避免无界增长）
+            if(HANDLED_TIME.size>300){
+              const nowTs=Date.now();
+              for(const [k,v] of HANDLED_TIME){ if(nowTs-v>15*60*1000) HANDLED_TIME.delete(k); }
+              for(const [k,v] of _RETRY_AT){ if(nowTs>v) _RETRY_AT.delete(k); }
+            }
             log(`★★ 福袋! 在线${d.online} ${disp(g.room)} ${JSON.stringify(d.fudai)}`);
             // 📸 福袋 DOM 快照：每次识别到福袋就把真实结构存档。
             //    用途：抖音改版后选择器可能静默失效（页面照常加载、candCount 恒为 0），
@@ -1790,12 +1833,14 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
               if(!_fr.ok && FOLLOW_GATE){
                 _followPass = _fr.inconclusive && FOLLOW_ALLOW_INCONCLUSIVE;
                 if(!_followPass){
-                  // 复用现有 need-follow 结果，看板/报表/CSV 映射无需改动
+                  // 复用现有 need-follow 结果，看板/报表/CSV 映射无需改动。
+                  // ⚠ rec 必须在这里调（统一出口只做 updateAnchor / log，不调 rec）；
+                  //    但 updateAnchor 与 log 只在下方统一出口做一次，以前这里重复写，
+                  //    导致同一福袋出现两行「结果: need-follow」和两次档案更新。
                   r={url:`https://live.douyin.com/${g.room}`,online:d.online,cd:(d.fudai||{}).cd,
-                     result:'need-follow',steps:['pre-follow:'+(_fr.reason||'fail')]};
+                     result:'need-follow',steps:['pre-follow:'+(_fr.reason||'fail')],
+                     followDiag:_fr.diag||null};
                   rec(r);
-                  await updateAnchor(g.room, (rooms.find(x=>x.room===g.room)||{}).host||'', r.result, new Date().toISOString());
-                  log('结果:',r.result,'|',JSON.stringify(r.steps));
                 }
               }
             }
@@ -1813,20 +1858,20 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
             // 更新主播档案（记忆：这间房什么时候发过什么类型的福袋）
             await updateAnchor(g.room, (rooms.find(x=>x.room===g.room)||{}).host||'', r.result, new Date().toISOString());
             log('结果:',r.result,'|',JSON.stringify(r.steps));
-            // 📌 记录待关注主播：headless 环境下抖音的关注点击会被风控静默丢弃
-            //    （实测真人式点击 / JS click / CDP 坐标点击三种方式，刷新后按钮仍是「关注」），
-            //    所以这里生成一份清单供手动关注，同时仍调用一次 ensureFollow 保留自动尝试。
-            try{
-              const sf=W+'/should-follow.md';
-              let txt='';
-              try{ txt=fs.readFileSync(sf,'utf8'); }catch(e){ txt=''; }
-              if(!txt.includes(g.room)){
-                if(!txt) txt='# 待手动关注的主播\n\n这些是成功抢到过福袋的直播间，建议在抖音 App 里手动关注。\n\n';
-                const host=(rooms.find(x=>x.room===g.room)||{}).host||'';
-                txt += `- [ ] ${g.room}  ${host}  —  ${new Date().toLocaleString('zh-CN')} 参与成功\n`;
-                fs.writeFileSync(sf, txt);
-              }
-            }catch(e){}
+            // 🔒 去重状态收敛到唯一出口（2026-11-05 18:42 事故修复）：
+            //    - joined/maybe-joined：写 12 分钟长窗，清掉短冷却
+            //    - 其余结果：不写长窗，只给 RETRY_COOLDOWN_MS 短冷却，让还活着的福袋能重试
+            //    旧版在「发现福袋」时就写长窗，关注门禁一失败就把剩余 6分58秒 的福袋锁死 12 分钟。
+            if(r.result==='joined'||r.result==='maybe-joined'){
+              HANDLED_TIME.set(g.room, Date.now());
+              _RETRY_AT.delete(g.room);
+            }else if(RETRY_COOLDOWN_MS>0){
+              _RETRY_AT.set(g.room, Date.now()+RETRY_COOLDOWN_MS);
+              if(r.result==='need-follow') log(`  ⏳ 参与未成，${RETRY_COOLDOWN_MS/1000}s 后若福袋仍在将重试`);
+            }
+            // 📌 待关注清单只在真正「需要关注而抢不到」时写，且文案按真实结果。
+            //    旧版这里无条件写「参与成功」，实测 18:42:36 明明是 need-follow，
+            //    should-follow.md 却记成参与成功，属数据不真实，已删除。
 
             // 📌 2026-11-05 起「参与成功后关注」已删除：
             //    关注改为抢福袋「之前」在主循环做（pre-follow），此处再做一次纯属冗余；
@@ -1849,19 +1894,22 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
             } else {
               fansStreak=0;
             }
-            // 关注型福袋抢不到时也记进待关注清单，手动关注后下次就能抢了
+            // 关注型福袋抢不到时记进待关注清单，手动关注后下次就能抢了
             if(r.result==='need-follow'){
               try{
                 const sf=W+'/should-follow.md';
                 let txt='';
                 try{ txt=fs.readFileSync(sf,'utf8'); }catch(e){ txt=''; }
                 if(!txt.includes(g.room)){
-                  if(!txt) txt='# 待手动关注的主播\n\n';
-                  txt += `- [ ] ${disp(g.room)}  —  ${new Date().toLocaleString('zh-CN')} 需要关注才能参与\n`;
+                  if(!txt) txt='# 待手动关注的主播\n\n这些是需要关注才能参与、但自动关注未验证通过的直播间，建议在抖音 App 里手动关注。\n\n';
+                  txt += `- [ ] ${disp(g.room)}  —  ${new Date().toLocaleString('zh-CN')} 关注未验证通过，未参与\n`;
                   fs.writeFileSync(sf, txt);
                 }
               }catch(e){}
-              log(`📌 ${disp(g.room)} 是需要关注才能参与的福袋，自动关注被平台风控拦截，已加入待关注清单`);
+              // ⚠ 不再硬编码「被平台风控拦截」：本次并未观测服务端响应，
+              //    真实原因可能是页面刚重建 UI 未刷新完。诊断字段在 exec-actions.jsonl。
+              const _how=(r.followDiag&&r.followDiag.verifyHow)||'unknown';
+              log(`📌 ${disp(g.room)} 关注未验证通过(${_how})，本轮未参与；已加入待关注清单，${RETRY_COOLDOWN_MS/1000}s 后可重试`);
             }
             if(r.result==='joined'||r.result==='maybe-joined'){
               log(`✅✅ 参与成功(${r.result})！守候开奖`);
