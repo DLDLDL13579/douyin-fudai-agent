@@ -804,3 +804,72 @@ load 8.97 且持续升到 13.3。查 CPU 时抓到两个抓取 Chrome 的 GPU �
 **教训**：文档里「CPU 降到 4.2%」是 11-02 当时的实测，不代表 7×24 长跑后仍成立。
 Chrome 的 GPU 进程开销与页面动画是**两个独立层面**，降载 CSS 管不到前者；
 资源巡检不能只看页面 CSS 是否生效，必须看进程树 CPU 与 load。
+
+## 2026-11-05 09:29：推翻 04:57 结论 —— main2 是登录态失效，不是「账号不下发福袋」
+
+用户 09:29 报告「账号 main2 好像出问题了」。查进程、端口、日志都正常，
+9751 自检报 `EMPTY_PAGE len=20`，复测 3 次恢复 `OK len=704~706`、Cookie 64 个齐全。
+但在页面文本里发现关键信号：**「需先登录，才能开始聊天」**。
+
+### 决定性实验：同房间同账号交叉验证
+
+两个 Chrome 各开新标签，同时访问主实例 09:31 刚命中福袋的 `170664225650`：
+
+| | 9750 主实例 | 9751 main2 |
+|:---|:---|:---|
+| 页面长度 | 626→635→661 | 659→663→676 |
+| `needLogin` | **false** | **true** |
+| 评论输入框 | **1** | **0** |
+| `LMUtLyr9` 福袋图标 | **1** | **0** |
+| `ShortTouchContainer` | 1 | 1 |
+
+补充证据：main2 在两个不同直播间都是 `needLogin:true`；新标签打开抖音首页
+`loginWord:7` 却 `hasAvatar:0`；`account-manager.mjs` 的 `readIdentity()` 本就有
+`ident.needLogin` 判定（靠 /user/self 跳 passport），当时没被用来做自检。
+
+**而 main2 的 `sessionid` / `sid_tt` / `uid_tt` 全在，`expires` 到 2027-01-02。**
+Cookie 存在 ≠ 服务端认可会话。旧 `check-alive.sh` 只查 `Network.getCookies` 里有没有这三个名字，
+因此连续 5 小时报 `OK`，把掉线伪装成「账号维度不下发福袋」。
+
+**04:57 那节的结论作废**：当时用 `diagnose-fudai-visibility.mjs` 看到 9751 无福袋图标，
+就归因于账号等级/风控降权，但没查页面是否需要登录。福袋不下发只是登录失效的**下游表现**。
+`candCount=0` 的原因应从三种扩为四种：真没福袋 / 采集端失效 /
+**服务端登录态失效** / 账号不可见。第四种必须排除第三种后才能定性。
+
+### 修复（3 项）
+
+1. **`scripts/check-alive.sh`**：页面文本正则
+   `/需先登录|请先登录|登录后参与|登录后可参与|登录后才能/` 与「页面稳定但无评论输入框」
+   两个判据，排在 Cookie 判定之前，且**不受守候开奖浮层豁免**。
+   验证：9750 仍 `OK`，9751 `LOGIN_EXPIRED needLogin=true` 退出码 2；
+   确定性测试强制 Cookie 齐全 + needLogin → 正确拦截。
+2. **`scripts/account-manager.mjs` 新增 `relogin <名字>`**：原地复用 profile 与端口，
+   不清账号目录，`Network.clearBrowserCookies` 后弹有头 Chrome 扫码，
+   会话级 Cookie 转 30 天持久化，**并用 `readIdentity()` 验证 /user/self 能读到抖音号才写 `loginOk:true`**
+   （Cookie 齐全不算成功），保留 `createdAt` 与旧昵称。
+   旧的 `add` 拒绝覆盖已有账号、`refresh` 只补昵称，缺的正是这个入口。
+3. **`launchChrome` 同步移除 SwiftShader**：`account-manager.mjs` 里还留着
+   `--enable-unsafe-swiftshader --use-angle=swiftshader`，是 08:04 改 `hunter35.mjs` 时的漏网，
+   一并改 `--disable-gpu`。
+
+验证：`node --check` 通过；帮助列出 `relogin`；绿色包内 swiftshader 0 处、relogin 4 处；
+门禁通过并提交 `e6fe8a8`（GitHub 推送因网络中断待补）。每小时巡检提醒第 10 条已改为四因排查，
+并明确「main2 0 战绩属预期但必须报告用户、不能静默跳过」。
+
+### 教训
+
+- **「有 Cookie」和「已登录」是两件事**。客户端能读到 Cookie 名与过期时间，
+  服务端可能早已吊销该会话。登录态自检必须有一个「服务端视角」的判据
+  （页面文案、评论框、或 `/user/self` 身份接口），不能只信 `Network.getCookies`。
+- **诊断实验要看全字段**。04:57 的双账号对照只比了福袋相关 DOM，
+  没比页面里「需先登录」与评论框，于是把因当成果。
+  同一份截图/DOM 里往往已经写着答案，只是当时没去找。
+- 用户一句「好像出问题了」比连续 5 轮绿灯巡检更早发现真问题，
+  说明巡检判据本身需要被质疑，不能因为「一直报 OK」就认定系统健康。
+
+### 待用户处理
+
+main2 需重新扫码：`bash scripts/fudai.sh stop-acc main2` →
+`node scripts/account-manager.mjs relogin main2`（弹窗，用抖音 App 扫码）→
+`bash scripts/fudai.sh start-acc main2 --force`。扫码是人工动作，代码无法代做。
+主实例 9750 全程未受影响，09:41 守候开奖正常检出未中奖。
