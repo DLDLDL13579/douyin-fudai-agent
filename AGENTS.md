@@ -1470,6 +1470,28 @@ for(const g of good){
 - 绿色包 27 文件同步：包内 `packet-config` / `detectPacketPanel` / `packet-skipped` 均在，
   `POST_DRAW_MS 7`、`VIP_EXEMPT 6`、`_RETRY_AT 6` 未回退
 
+### 运维补记：GitHub HTTPS 主站不通时改走 SSH（20:34 实测）
+
+提交 `28efdf7` 后连续 3 次 HTTPS 推送失败：`Operation too slow` /
+`Failed to connect to github.com port 443`。网络诊断发现
+`api.github.com` 返回 **200**、`github.com` 与 `ssh.github.com` 均 **000 timeout**，
+DNS 正常解析到 `20.205.243.166` —— 是到 GitHub 主站 HTTPS 的路由问题，不是整体断网。
+而 `ssh -T git@github.com`（22）与 `ssh -p 443 -T git@ssh.github.com` **都认证成功**。
+
+```bash
+# HTTPS 主站不通时的稳定兜底
+GIT_SSH_COMMAND='ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no' \
+  git push git@github.com:DLDLDL13579/douyin-fudai-agent.git main
+GIT_SSH_COMMAND='ssh -o ConnectTimeout=10 -o StrictHostKeyChecking=no' \
+  git fetch git@github.com:DLDLDL13579/douyin-fudai-agent.git main
+git update-ref refs/remotes/origin/main FETCH_HEAD
+```
+
+一次成功，`origin/main` 同步到 `28efdf7`、待推 0。
+⚠ macOS 没有 `timeout` 命令，别用它包 git；用 `ConnectTimeout` 或 `perl -e 'alarm ...'`。
+⚠ 只能推 `git@github.com:...` 这个显式 URL，不要改 `origin` 的 fetch/push 地址，
+   否则会破坏既有 credential-token 推送流程。
+
 ### 教训
 
 - **「看不见」和「没有」在日志里长得一样，这次还多一层：「看见了但读不到」**。
