@@ -65,13 +65,20 @@ const NIGHT_END=Number(process.env.DY_NIGHT_END||_THR.nightEnd);
 
 // ⏱ 等待时间单一数据源：data/wait-config.json（2026-11-04 用户要求「等待发福袋时间砍半」）。
 //    scale 统一作用于「常驻时长 / 无福袋提前换房 / 空轮退避」三类等待。
-//    ⚠ 抢到福袋后的「守候开奖 waitSec」不在这里：它由福袋倒计时决定，
-//      砍半会提前离开、丢掉开奖结果，不能动。
-let _WAIT={scale:1,perRoomMinMs:120000,perRoomMaxMs:480000,vipMinMs:480000,
+//    ⚠ 抢到福袋后的「守候开奖 waitSec」不受 scale 影响：砍半会提前离开、丢开奖结果。
+//      2026-11-05 起它同样由本 json 配置（drawBufferSec / drawMaxSec / drawFallbackSec），
+//      按福袋剩余倒计时动态计算，不再写死 +180。
+//      实测 117 次守候：64 次检出弹窗全部比倒计时归零提前 11~44s，零延迟；
+//      固定 180s 冗余只在 53 次漏检时白等，平均 181s，故收紧到 60s。
+let _WAIT={scale:1,drawBufferSec:60,drawMaxSec:1200,drawFallbackSec:900,
+           perRoomMinMs:120000,perRoomMaxMs:480000,vipMinMs:480000,
            highYieldMs:900000,noFudaiNormalMs:360000,noFudaiVipMinMs:600000,
            emptyRoundStepMs:120000,emptyRoundMaxMs:600000};
 try{ _WAIT=Object.assign(_WAIT, JSON.parse(fs.readFileSync(DATA_DIR+'/wait-config.json','utf8'))||{}); }catch(e){}
 const WS=Math.max(0.1,Math.min(2,Number(_WAIT.scale)||1));   // 限制在 0.1~2，防误配
+const DRAW_BUF=Math.max(0,Math.min(600,Number(_WAIT.drawBufferSec)||0));
+const DRAW_MAX=Math.max(60,Math.min(3600,Number(_WAIT.drawMaxSec)||1200));
+const DRAW_FALLBACK=Math.max(60,Math.min(3600,Number(_WAIT.drawFallbackSec)||900));
 function getMinOnline(){
   const h=new Date().getHours();
   // 晚间 19:00-24:00 用高门槛，凌晨 0-6 点按白天算（人少但仍在播）
@@ -1717,13 +1724,14 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
                 if(dm[g.room]){ delete dm[g.room]; fs.writeFileSync(DRY_FILE, JSON.stringify(dm)); }
               }catch(e){}
               // 🔑 严格检测开奖：只看居中浮层（弹窗），排除聊天区弹幕
-              // 按福袋剩余倒计时决定守候时长：原来固定盲等 20 分钟，而倒计时通常只有 5-10 分钟，
-              // 多出来的时间全浪费在同一间房上，正是「频率太低」的隐藏原因之一
-              // 兜底 900 秒（15 分钟）：福袋倒计时可达 10 分钟，加上开奖延迟，
-              // 原来兜底 600 秒可能不够，导致提前离开错过开奖
-              const waitSec=(typeof secLeft==='number'&&secLeft>0)?Math.min(1200,secLeft+180):900;
+              // 守候时长按福袋剩余倒计时动态算（wait-config.json 的 draw* 三项），不受 scale 影响。
+              // 2026-11-05 实测：64 次检出弹窗全部比倒计时归零提前 11~44s，零延迟；
+              // 旧的固定 +180 冗余只在漏检时白等（53 次平均 181s），收紧到 drawBufferSec=60。
+              // 检出弹窗立即 break，所以冗余只影响「检测漏判」时的巡房频率，不影响正常开奖。
+              const waitSec=(typeof secLeft==='number'&&secLeft>0)
+                ? Math.min(DRAW_MAX,secLeft+DRAW_BUF) : DRAW_FALLBACK;
               const waitLoops=Math.max(24,Math.ceil(waitSec/5));
-              log(`  守候开奖 ${waitLoops*5}s（福袋剩余 ${secLeft}s）`);
+              log(`  守候开奖 ${waitLoops*5}s（福袋剩余 ${secLeft}s，冗余 ${DRAW_BUF}s）`);
               for(let i=0;i<waitLoops;i++){
                 await sleep(5000);
                 const dr=await ev(tab,`(()=>{
