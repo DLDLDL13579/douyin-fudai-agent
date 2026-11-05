@@ -428,7 +428,7 @@ async function ensureFollow(tab, room){
  * 用户 2026-11-02 要求：大房间的粉丝团福袋也要抢，所以先加入粉丝团再参与。
  * 注意：抖音粉丝团通常需要「点亮粉丝牌」（1 抖币），可能产生费用。
  */
-async function joinFansGroup(tab){
+async function joinFansGroup(tab, roomArg){
   try{
     // 找「加入粉丝团」按钮
     // ⚠ 实测踩坑（19:10 郭少杰 10 万人房间）：innerText 是会冒泡的——主播昵称
@@ -602,7 +602,10 @@ async function joinFansGroup(tab){
     //    ⚠ 只有 ok（验证读到「已加入/点亮成功」）才记账：hasJoinBtn 只是参与按钮
     //      就位、加入未确认，不能算消费、也不能算成功。2026-11-05 实测历史 24 次
     //      「成功」全是 joinBtn、真加入 0 次，所以 coin-spend.jsonl 一直是 0 钻。
-    const room=(typeof CURRENT_ROOM!=='undefined')?CURRENT_ROOM:'';
+    // ⚠ 2026-11-05 15:57 巡检发现旧写法取 CURRENT_ROOM（在 tryJoin 内部 626 行
+    //    才定义，本函数在 431 行、作用域取不到）导致 room 恒为空，真实记账缺房间号。
+    //    改为由调用点显式传入 roomArg，不再依赖函数外的作用域变量。
+    const room=roomArg||'';
     if(ok){
       try{
         fs.appendFileSync(DATA_DIR+'/coin-spend.jsonl', JSON.stringify({
@@ -720,7 +723,7 @@ async function tryJoin(tab,f,url,online){
         //    任何房间的粉丝团型福袋都先尝试加入粉丝团、再参与。
         //    用户已授权使用抖币（加入粉丝团消耗 1 钻），每次加入记入 coin-spend.jsonl。
         out.steps.push(`fans-try(online=${online})`);
-        const fj=await joinFansGroup(tab);
+        const fj=await joinFansGroup(tab, CURRENT_ROOM);
         out.steps.push('fans-join:'+(fj.ok?'ok':(fj.hasJoinBtn?'joinBtn':'fail:'+fj.why)));
         // ok 或 hasJoinBtn 都继续：hasJoinBtn 表示「加入已成功、参与按钮已就位」，
         // 只是验证没来得及确认（20:20 吕德华 10 万人房间实测路径）。
@@ -832,7 +835,7 @@ async function tryJoin(tab,f,url,online){
     // 2026-11-04 解除限制后：这里不再直接跳过，而是尝试加入粉丝团后再参与。
     // （正常路径在循环内已处理，走到这里说明面板没打开但页面有粉丝团入口）
     out.steps.push('fans-fallback');
-    const fj=await joinFansGroup(tab);
+    const fj=await joinFansGroup(tab, CURRENT_ROOM);
     out.steps.push('fans-fallback-join:'+(fj.ok?'ok':(fj.hasJoinBtn?'joinBtn':'fail:'+fj.why)));
     // 同样不直接放弃：给参与按钮最后一次机会，命中则落到下方统一点击流程
     await sleep(2000);
