@@ -82,6 +82,7 @@ const LABEL = {
   'fans-unverified': '粉丝团加入未确认',
   'need-follow': '需关注(抢不到)',
   'no-panel': '未找到面板',
+  'packet-skipped': '人气红包按配置不抢',
   'btn-still': '按钮未消失',
 };
 

@@ -100,6 +100,12 @@ const FOLLOW_ALLOW_INCONCLUSIVE=!!_FOLLOW.allowInconclusive;
 //    点击关注后的二次验证间隔、参与失败后的短冷却。二者都带上下限钳制，配置异常不会卡死主循环。
 const VERIFY_RETRY_MS=Math.max(0,Math.min(20000,Number(_FOLLOW.verifyRetryMs)||0));
 const RETRY_COOLDOWN_MS=Math.max(0,Math.min(600000,Number(_FOLLOW.retryCooldownMs)||0));
+// 🧧 人气红包策略单一数据源：data/packet-config.json（2026-11-05 20:03 用户定稿「不抢人气红包」）。
+//    默认 detectEnabled=true / grabEnabled=false：识别并记真实结果，但不点「抢」、不消耗抖币。
+let _PACKET={detectEnabled:true,grabEnabled:false};
+try{ _PACKET=Object.assign(_PACKET, JSON.parse(fs.readFileSync(DATA_DIR+'/packet-config.json','utf8'))||{}); }catch(e){}
+const PACKET_DETECT=!!_PACKET.detectEnabled;
+const PACKET_GRAB=!!_PACKET.grabEnabled;
 function getMinOnline(){
   const h=new Date().getHours();
   // 晚间 19:00-24:00 用高门槛，凌晨 0-6 点按白天算（人少但仍在播）
@@ -268,6 +274,55 @@ async function getBox(tab,nodeId){
       returnByValue:true},15000);
     return rc?.result?.value||null;
   }catch(e){return null;}
+}
+
+// 🧧 人气红包面板识别（2026-11-05 19:51 事故修复）。
+//    旧版用 `document.body.innerText` 判「人气红包」，但实测红包面板在 iframe 里，
+//    主 frame 读不到 → isPacket 恒 false → 6 个点击位置全落空后误报 no-panel。
+//    截图证据：19:21 白泽、12:38 ☀️歌小样 的点击后现场都是同一个粉色人气红包面板，
+//    且 shortTouch 倒计时仍在走，福袋还活着却被放弃。全历史 243 条记录 packet 步骤 0 条。
+//
+//    修法用 CDP DOM 域而非 JS：
+//      - DOM.performSearch 会遍历 iframe 与 shadow DOM（独立实验：iframe 内「人气红包」cnt=2）
+//      - 双判据「人气红包」+「可抢红包」同时命中才算红包面板，避免弹幕提词/普通福袋误判
+//      - DOM.getBoxModel 对 iframe 内节点返回「主视口绝对坐标」（实验：iframe 偏移 400,200
+//        时内部按钮坐标精确为 520,320），可直接喂给 clickXY；getBox 用的是 getBoundingClientRect，
+//        在 iframe 内只给相对坐标，不能用于这里
+async function detectPacketPanel(tab){
+  if(!PACKET_DETECT) return {found:false,disabled:true};
+  try{
+    await tab.cdp.send('DOM.getDocument',{depth:-1,pierce:true},30000);
+    const search=async(q)=>{
+      const r=await tab.cdp.send('DOM.performSearch',{query:q,includeUserAgentShadowDOM:true},20000);
+      if(!r.resultCount) return 0;
+      await tab.cdp.send('DOM.discardSearchResults',{searchId:r.searchId}).catch(()=>{});
+      return r.resultCount;
+    };
+    const a=await search('人气红包'), b=await search('可抢红包');
+    if(!(a>0&&b>0)) return {found:false,hits:{packet:a,grabHint:b}};
+    // 找圆形「抢」按钮：DOM.performSearch('抢') 会同时命中「¥47 抢」等商品卡，
+    // 用 getBoxModel 的宽高近似正方形 + 主视口居中区域过滤，取最接近圆形的一个。
+    const r=await tab.cdp.send('DOM.performSearch',{query:'抢',includeUserAgentShadowDOM:true},20000);
+    const g=r.resultCount
+      ? await tab.cdp.send('DOM.getSearchResults',{searchId:r.searchId,fromIndex:0,toIndex:Math.min(r.resultCount,12)},20000)
+      : {nodeIds:[]};
+    if(r.resultCount) await tab.cdp.send('DOM.discardSearchResults',{searchId:r.searchId}).catch(()=>{});
+    let best=null;
+    for(const nid of g.nodeIds||[]){
+      try{
+        const bm=await tab.cdp.send('DOM.getBoxModel',{nodeId:nid},12000);
+        const q=bm?.model?.content;
+        if(!q||q.length<8) continue;
+        const w=Math.round(bm.model.width), h=Math.round(bm.model.height);
+        const cx=Math.round((q[0]+q[2]+q[4]+q[6])/4), cy=Math.round((q[1]+q[3]+q[5]+q[7])/4);
+        if(w<40||h<40||w>220||h>220) continue;             // 商品卡按钮是 60x30，天然排除
+        if(cx<250||cx>1050||cy<150||cy>700) continue;       // 居中浮层，排除右侧排行榜/商品卡
+        const ratio=Math.abs(w-h)/Math.max(w,h);
+        if(!best||ratio<best.ratio) best={x:cx,y:cy,w,h,ratio,nodeId:nid};
+      }catch(e){}
+    }
+    return {found:true,hits:{packet:a,grabHint:b},grab:best};
+  }catch(e){ return {found:false,err:String(e.message).slice(0,60)}; }
 }
 
 const SCAN=`(()=>{
@@ -706,50 +761,52 @@ async function tryJoin(tab,f,url,online){
     }
     if(btn.cnt>0){out.steps.push('btn@'+pos.n);break;}
 
-    // 🧧 人气红包（2026-11-04 03:55 截图实测，此前完全没处理这一类）
-    //    面板长得和普通福袋完全不同：
-    //      【xxx】的人气红包 / 价值 999 / 中心一个大红「抢」按钮（需 1 钻）
-    //      / 底部「送人气票 🎫 可抢红包」/「3分56秒后随机开奖」
-    //    参与条件不是发评论也不是粉丝团，就是点「抢」。用户已授权用抖币，直接抢。
-    const packetInfo=await ev(tab,`(()=>{var b=document.body.innerText||'';
-      return JSON.stringify({isPacket:/人气红包/.test(b)});})()`,10000);
-    let isPacket=false;
-    try{ isPacket=!!JSON.parse(packetInfo).isPacket; }catch(e){}
-    if(isPacket){
+    // 🧧 人气红包（2026-11-05 19:51 事故修复，用户定稿「不抢人气红包」）
+    //    面板长得和普通福袋完全不同：【xxx】的人气红包 / 价值 5999 / 圆形「抢」按钮（需 1 钻）
+    //    / 底部「送人气票 可抢红包」。旧版用主 frame 的 body.innerText 判「人气红包」，
+    //    但面板在 iframe 里 → 上线起 0 次命中 → 6 个位置全落空后误报 no-panel。
+    //    现改用 detectPacketPanel 走 CDP DOM 域（跨 iframe + shadow DOM），
+    //    并按 packet-config.json 的 grabEnabled 决定是否点「抢」：
+    //      默认 false = 只截图留证、记真实结果 packet-skipped，不消耗抖币、不再试其他位置
+    //      true     = 用 getBoxModel 的主视口绝对坐标点圆形「抢」，并验证参与结果
+    const pk=await detectPacketPanel(tab);
+    if(pk.found){
       out.steps.push('packet@'+pos.n);
-      const grab=await ev(tab,`(()=>{
-        var best=null;
-        for(const el of document.querySelectorAll('div,span,button')){
-          var t=(el.innerText||'').trim();
-          if(t!=='抢'&&t!=='抢红包') continue;
-          var r=el.getBoundingClientRect();
-          if(r.width<24||r.height<24||r.width>220||r.height>140) continue;
-          var ratio=Math.abs(r.width-r.height)/Math.max(r.width,r.height);  // 截图是圆按钮，选最接近正方形的
-          if(!best||ratio<best.ratio) best={x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),ratio:ratio,txt:t};
-        }
-        return best?JSON.stringify(best):null;
-      })()`,10000);
-      if(grab){
-        const gp=JSON.parse(grab);
-        log(`    🧧 人气红包: 点击「${gp.txt}」@${gp.x},${gp.y}`);
-        await shot(tab,`h35-PACKET-${url.split('/').pop()}-${Date.now()}.png`);
-        await clickXY(tab,gp.x,gp.y);
-        await sleep(3500);
-        const okv=await ev(tab,`(()=>{var b=document.body.innerText||'';
-          return JSON.stringify({done:/已抢|已参与|参与成功|抢到了|已领取/.test(b), gone:!/人气红包/.test(b)});})()`,12000);
-        let pOk=false;
-        try{ const o=JSON.parse(okv); pOk=!!(o.done||o.gone); }catch(e){}
-        if(pOk){
-          out.steps.push('packet-grab:ok');
-          log('    🧧 人气红包抢成功');
-          out.result='joined';
-          return out;
-        }
-        out.steps.push('packet-grab:unverified');
-      }else{
-        out.steps.push('packet-grab:no-btn');
+      out.packetDiag={hits:pk.hits,grab:pk.grab?{x:pk.grab.x,y:pk.grab.y,w:pk.grab.w,h:pk.grab.h}:null};
+      await shot(tab,`h35-PACKET-${url.split('/').pop()}-${Date.now()}.png`);
+      if(!PACKET_GRAB){
+        out.steps.push('packet-skipped:by-config');
+        out.result='packet-skipped';
+        log(`  🧧 人气红包已识别（${JSON.stringify(pk.hits)}），按配置不抢，记真实结果 packet-skipped`);
+        return out;
       }
-      out.result='no-panel';   // 红包型已确认，不再试其他位置
+      if(!pk.grab){
+        out.steps.push('packet-grab:no-btn');
+        out.result='packet-skipped';
+        log('  🧧 人气红包已识别但没定位到圆形「抢」按钮，不尝试点击');
+        return out;
+      }
+      log(`    🧧 人气红包: 点击「抢」@${pk.grab.x},${pk.grab.y}（主视口绝对坐标）`);
+      await clickXY(tab,pk.grab.x,pk.grab.y);
+      await sleep(3500);
+      // 验证同样要跨 iframe：用 DOM.performSearch 看红包文案是否消失/出现成功文案
+      const verify=await (async()=>{
+        try{
+          await tab.cdp.send('DOM.getDocument',{depth:-1,pierce:true},30000);
+          const s=async(q)=>{const r=await tab.cdp.send('DOM.performSearch',{query:q,includeUserAgentShadowDOM:true},20000);
+            if(r.resultCount)await tab.cdp.send('DOM.discardSearchResults',{searchId:r.searchId}).catch(()=>{});return r.resultCount;};
+          return {packet:await s('人气红包'),done:await s('已抢')+await s('已领取')+await s('抢到了')};
+        }catch(e){return {err:String(e.message).slice(0,40)};}
+      })();
+      out.packetVerify=verify;
+      if(verify.done>0||(verify.packet===0)){
+        out.steps.push('packet-grab:ok');
+        out.result='joined';
+        log('    🧧 人气红包抢成功');
+        return out;
+      }
+      out.steps.push('packet-grab:unverified');
+      out.result='packet-skipped';
       return out;
     }
 

@@ -926,7 +926,7 @@ const LABEL = {
   // 2026-11-04 起粉丝团不再直接跳过，而是尝试加入（成功变 joined），
   // 仍是 skip-fans 说明「加入了但没抢到」或「加入失败」，标签要准确反映。
   'skip-fans':'粉丝团未加入','fans-no-coins':'抖币不足·需充值','fans-unverified':'粉丝团加入未确认','no-panel':'未找到面板',
-  'need-follow':'需要关注(抢不到)','btn-still':'按钮未消失'
+  'packet-skipped':'人气红包·按配置不抢','need-follow':'需要关注(抢不到)','btn-still':'按钮未消失'
 };
 async function tick(){
   try{
@@ -1146,6 +1146,7 @@ async function tick(){
           'fans-unverified': ['粉丝团加入未确认', 'warn'],
           'need-follow': ['需关注', 'warn'],
           'no-panel': ['未找到面板', 'dim'],
+          'packet-skipped': ['人气红包·不抢', 'dim'],
         };
         const LBL = d.accountLabels || {};
         el.innerHTML = evs.map(j=>{

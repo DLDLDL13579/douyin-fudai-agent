@@ -1,0 +1,5 @@
+{
+  "grabEnabled": false,
+  "detectEnabled": true,
+  "note": "2026-11-05 20:03 用户定稿：修人气红包识别与结果留痕，但「不抢人气红包」。detectEnabled=true 表示用 DOM.performSearch 跨 iframe 识别红包面板（旧版只读主 frame 的 document.body.innerText，面板在 iframe 里导致上线起 0 次命中）；grabEnabled=false 表示识别后只记录真实结果 packet-skipped，不点「抢」按钮、不消耗抖币。识别链路已包含按主视口绝对坐标定位圆形「抢」按钮，未来若改策略只需把 grabEnabled 改 true，不需要改源码。双判据「人气红包」+「可抢红包」同时命中才算红包面板，避免弹幕提词或普通福袋误判。"
+}

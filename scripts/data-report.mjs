@@ -173,6 +173,7 @@ for (const [k, v] of Object.entries(byResult).sort((a, b) => b[1] - a[1])) {
     'fans-no-coins': '抖币不足(需充值)',
     'fans-unverified': '粉丝团加入未确认',
     'no-panel': '未找到面板',
+    'packet-skipped': '人气红包(按配置不抢)',
     'need-follow': '需要关注(抢不到)',
     'btn-still': '按钮未消失',
   }[k] || k;
