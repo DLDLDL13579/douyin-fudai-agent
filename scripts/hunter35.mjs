@@ -1917,9 +1917,12 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
             log('结果:',r.result,'|',JSON.stringify(r.steps));
             // 🔒 去重状态收敛到唯一出口（2026-11-05 18:42 事故修复）：
             //    - joined/maybe-joined：写 12 分钟长窗，清掉短冷却
+            //    - packet-skipped：用户定稿「不抢人气红包」，这是终态而非参与失败，
+            //      同样写 12 分钟长窗。否则 45s 短冷却会让同一个还在倒计时的红包被
+            //      反复识别、反复截图、反复记 packet-skipped，污染统计并堆积截图。
             //    - 其余结果：不写长窗，只给 RETRY_COOLDOWN_MS 短冷却，让还活着的福袋能重试
             //    旧版在「发现福袋」时就写长窗，关注门禁一失败就把剩余 6分58秒 的福袋锁死 12 分钟。
-            if(r.result==='joined'||r.result==='maybe-joined'){
+            if(r.result==='joined'||r.result==='maybe-joined'||r.result==='packet-skipped'){
               HANDLED_TIME.set(g.room, Date.now());
               _RETRY_AT.delete(g.room);
             }else if(RETRY_COOLDOWN_MS>0){
