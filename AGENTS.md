@@ -1504,3 +1504,97 @@ git update-ref refs/remotes/origin/main FETCH_HEAD
   `DOM.getBoxModel` 才是「找得到 + 点得准」的组合。
 - **用户说「不抢」时，能力可以修好但动作要关掉**。把识别与执行拆成两个配置位，
   既满足当前边界，又避免以后改策略时重新踩一次 iframe 的坑。
+
+## 2026-11-05 21:17：策略可观测性底座 —— 从「只学主播」到「也学自己」
+
+用户提出：`学习不仅仅学习主播开播时间，发福袋情况，还要学习自己的抢福袋策略有没有优化空间，比如时间，选择房间，等，需要很智能的进化`。
+
+### 先量化现状，确认缺口是真的
+
+`anchors.json` 的 533 个档案只有 `host / firstSeen / fudaiTotal / joinable / fans / hourly / lastFudaiAt / visits / lastVisit`
+——**全是主播维度**。4 份 `data/*.json` 策略配置人工定死、代码只读。系统从不评估自己参数调得对不对。
+
+离线体检（`/tmp/strategy-audit.mjs`，只读）实测今日数据：
+
+| 维度 | 实测 | 说明 |
+|:---|:---|:---|
+| 房间选择 | 127 个常驻≥3 次的房间里 **94 个 74% 今日 0 参与** | 时间大量花在无产出房间 |
+| 时间分配 | 6 点参与率 50%，9/11/13/14/15/17/20 点 100% | 时段产出差异明显，但系统不按此调整 |
+| 目标函数 | 参与 95 次、中奖 0、`wins.jsonl` 不存在 | 隐含目标实际是「参与次数」，不是中奖期望 |
+| 开奖记录 | `losses.jsonl` 131 条只有 `account/room/win/text/at` | **没有关联哪次参与、等了多久**，分母断链 |
+
+最致命的一条：`participations` / `losses` 都不记录「当时用哪套参数」，
+所以**同一条参与发生在 day=8000 还是 50000 门槛下完全无法区分**，
+系统不可能回答「把门槛降到 X 会不会更好」，只能靠人工拍脑袋改 json。
+
+### 用户定稿（两轮 ask_user_question）
+
+- 范围：**先建可观测性底座**，不改任何策略、不加看板卡片
+- 目标函数：**单位时间中奖期望**（不是参与次数），避免把「多抢低质量福袋」当进步
+- 数据边界：`strategy-log.jsonl` 属运行时数据，**按既有约定不提交 GitHub**
+
+### 实现（`scripts/hunter35.mjs` + `scripts/strategy-report.mjs`）
+
+**6 个事件，全部只追加写、try/catch 包裹、写失败绝不影响主循环**：
+
+| 事件 | 时机 | 关键字段 |
+|:---|:---|:---|
+| `candidates` | 本轮选房完成 | `poolAll/poolPass/picked/avgScore/rooms[]` |
+| `room-enter` | 开始常驻 | `decisionId` / `roomStayId`、`plannedStaySec`、`visits` |
+| `gate-skip` | 福袋被在线门槛拦下 | `online/minOnline/secLeft` —— **门槛是否偏高的反事实证据** |
+| `join-result` | 统一结果出口 | `result/joinMs/steps` |
+| `draw-result` | 检出开奖弹窗 | `win/waitedSec/totalStaySec` |
+| `room-exit` | 常驻结束 | `stayedSec/hadFudai/postDrawRound` —— **空手房间唯一的耗时证据** |
+
+**3 个设计要点**：
+
+1. `POLICY_ID`：把 4 份配置的有效值做稳定哈希，配置一变 ID 就变，报告可按参数版本分组做 A/B 对比。
+   快照含 `threshold / wait / follow / packet` 四组，值全部来自 `data/*.json`，不硬编码。
+2. `decisionId`（= `roomStayId`）贯穿 `room-enter → join-result → draw-result → room-exit`，
+   并用 `roomT0` 算真实耗时。**分母用 `room-exit.stayedSec` 实测值，不用 `plannedStaySec` 计划值**。
+3. `wins.jsonl` / `losses.jsonl` 同步补 `decisionId / waitedSec / plannedWaitSec`，
+   从此开奖结果能追溯到具体哪次参与、等了多久。
+
+**`strategy-report.mjs`（离线只读，绝不改写任何 `data/*.json`）**：
+
+```bash
+node scripts/strategy-report.mjs                  # 今日
+node scripts/strategy-report.mjs --all            # 全历史
+node scripts/strategy-report.mjs --by policy      # 按参数版本分组
+node scripts/strategy-report.mjs --date 2026-11-05
+```
+
+报告 5 段：核心指标（单位时间中奖期望）、A 时间维度、B 房间维度（零产出房间+降权候选）、
+C 动作维度（循环蹲守收益、门槛拦截反事实）、D 参数版本、E 优化候选。
+**样本不足时明确标注「样本不足」，不下调参结论**；中奖 0 次时提示无法比较策略优劣。
+
+### 验证
+
+- `node --check` 两个文件通过
+- `/tmp/verify-policy-init.mjs`：源码原段真实求值，无 TDZ，`POLICY_ID=ea26817f`、21 点门槛 50000、配置真值全一致
+- `/tmp/verify-strategy-log.mjs`：**22 项静态断言全过** —— 6 事件齐全、变量作用域（注释里的引用已排除）、
+  ES6 简写字段识别、wins/losses 配对、写安全、4 份配置零改动
+- `/tmp/verify-strategy-report.mjs`：**12 项端到端断言全过** —— 在隔离临时目录造 19 条合成数据，
+  停留 1.7h / 中奖期望 0.588 次/小时 / 零产出房间 3 个吃掉 70.6% 时间 / E 段建议全部算对
+- `precommit-check.mjs` 门禁零命中，提交 `cfb221a`，SSH 推送成功，只 add 2 个白名单文件
+
+### ⚠ 本次顺带发现的真盲点：高产房间会把进程「锁死」
+
+排查「埋点为何还没生效」时发现：主实例从 **20:25:43 起 95 分钟、8 次参与全在同一房间**
+`钟哥过场多(604512334242)`，连续 7 轮 `🔁 开奖后再蹲` 每轮都捞到新福袋 → 又开 655s 守候 → 又蹲。
+按用户「不设轮数上限」的定稿，这**完全正确且高产**，但后果是：
+
+- 守护脚本 `/tmp/restart-when-idle-packet2.mjs` 一直等不到「空闲窗口」，
+  `28efdf7` 归类补丁与本次底座**都还停在源码里没进运行时**
+- 系统无法感知「我已经 95 分钟没看过别的房间了」—— 这恰恰是本次底座要暴露、
+  下一阶段该由离线报告量化的问题
+
+**不要擅自改 `postDrawWaitSec` 或加轮数上限**，那是用户明确定稿的策略。
+底座上线后，`room-exit.stayedSec` + `postDrawRound` 会直接给出「单房间锁死时长」，
+由数据回答「该不该给高产房间设软上限」，而不是拍脑袋。
+
+### 回滚
+
+底座纯观测，删掉 6 处 `recStrategy(...)` 调用即完全回到旧行为；
+`strategy-report.mjs` 是独立脚本，删掉不影响主程序。
+`wins/losses` 新增的 3 个字段是追加，看板与报表都不读它们，无兼容风险。
