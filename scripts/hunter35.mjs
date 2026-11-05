@@ -74,6 +74,7 @@ const NIGHT_END=Number(process.env.DY_NIGHT_END||_THR.nightEnd);
 //      实测 117 次守候：64 次检出弹窗全部比倒计时归零提前 11~44s，零延迟；
 //      固定 180s 冗余只在 53 次漏检时白等，平均 181s，故收紧到 60s。
 let _WAIT={scale:1,drawBufferSec:60,drawMaxSec:1200,drawFallbackSec:900,
+           postDrawWaitSec:120,
            perRoomMinMs:120000,perRoomMaxMs:480000,vipMinMs:480000,
            highYieldMs:900000,noFudaiNormalMs:360000,noFudaiVipMinMs:600000,
            emptyRoundStepMs:120000,emptyRoundMaxMs:600000};
@@ -82,6 +83,10 @@ const WS=Math.max(0.1,Math.min(2,Number(_WAIT.scale)||1));   // 限制在 0.1~2�
 const DRAW_BUF=Math.max(0,Math.min(600,Number(_WAIT.drawBufferSec)||0));
 const DRAW_MAX=Math.max(60,Math.min(3600,Number(_WAIT.drawMaxSec)||1200));
 const DRAW_FALLBACK=Math.max(60,Math.min(3600,Number(_WAIT.drawFallbackSec)||900));
+// 🔁 抢完福袋守完开奖后，再留 postDrawWaitSec 秒看有没有新福袋；有就继续抢，如此循环。
+//    用户 2026-11-05 定稿「不设轮数上限」：只要每次等待窗口内还有新福袋就一直留在该房间。
+//    0 表示关闭该行为（回到「守完开奖立即换房」）。不受 scale 影响。
+const POST_DRAW_MS=Math.max(0,Math.min(1800,Number(_WAIT.postDrawWaitSec)||0))*1000;
 // 📌 关注策略单一数据源：data/follow-config.json（2026-11-05 用户定稿「抢福袋前都需要先关注主播」）。
 //    关注必须在 tryJoin 打开福袋面板「之前」做：面板是全屏遮罩，会挡住左上角关注按钮的
 //    elementFromPoint 命中。实测历史 73 次关注 71 次失败（45 no-btn / 26 clicked-unverified），
@@ -220,7 +225,7 @@ async function updateAnchor(room, host, result, at){
 
 const sleep=(ms)=>new Promise(r=>setTimeout(r,ms));
 let dbgCnt=0;   // 采样计数
-const HANDLED_TIME=new Map();   // 房间 -> 上次处理福袋的时间戳（6 分钟内不重复处理）
+const HANDLED_TIME=new Map();   // 房间 -> 上次处理福袋的时间戳（12 分钟内不重复处理）
 
 class CDP{constructor(ws){this.ws=ws;this.id=0;this.p=new Map();ws.onmessage=(e)=>{const m=JSON.parse(e.data);if(m.id&&this.p.has(m.id)){const q=this.p.get(m.id);this.p.delete(m.id);m.error?q.rej(new Error(JSON.stringify(m.error))):q.res(m.result);}};}
  send(m,p={},t=25000){const id=++this.id;return new Promise((res,rej)=>{const tm=setTimeout(()=>{this.p.delete(id);rej(new Error('timeout'));},t);this.p.set(id,{res:(v)=>{clearTimeout(tm);res(v);},rej:(e)=>{clearTimeout(tm);rej(e);}});this.ws.send(JSON.stringify({id,method:m,params:p}));});}}
@@ -1676,12 +1681,29 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
           })()`,10000);
         }catch(e){}
         // 📌 关注挪到「发现福袋」之后做——只关注真正发福袋的主播，不扫街式关注
-        const t0=Date.now();
+        // 🔁 2026-11-05 用户定稿「抢完福袋守完开奖后，再等 2 分钟看有没有新福袋，有就继续抢，不设轮数上限」。
+        //    实现：把「房间停留预算」做成可重置的。守候开奖是嵌套在 while 里的长等待（245~660s），
+        //    若不重置 t0，守候一结束 elapsed 必然远超 perMs(60s)，while 立即退出换房，根本没机会再等。
+        //    守完开奖后把 t0 重置为当前、预算设为 POST_DRAW_MS，循环即可继续留在本房间扫福袋；
+        //    再命中新福袋就再抢再守再重置，如此循环。d.exited（下播）与 SCAN 持续报错都能让 while 自然退出，
+        //    所以「不设轮数上限」不等于死循环。POST_DRAW_MS=0 可一键回到「守完开奖立即换房」。
+        let t0=Date.now();
+        let stayBudget=perMs;
+        let postDrawRound=0;       // 开奖后蹲守轮数（仅日志可观测）
+        let postDrawUnlockPending=false;  // 守完开奖，等旧福袋图标消失后再解锁去重
         let handled=false, nextDiag=30000;
-        while(Date.now()-t0<perMs){
+        while(Date.now()-t0<stayBudget){
           const d=await ev(tab,SCAN,20000);
           if(!d||d.__err){ await sleep(2000); continue; }
           if(d.exited){ log('已退出'); break; }
+          // 🔁 守完开奖后，只有观察到旧福袋图标确实消失 candCount===0 才解锁去重。
+          //    不做「超时兜底解锁」：若旧图标赖着不消失，超时解锁会把同一个旧福袋再抢一次，
+          //    重复抢比漏一轮更糟。真出现「无缝衔接」时本轮自然到期换房，下一轮重进仍会扫到新福袋。
+          if(postDrawUnlockPending && (d.candCount||0)===0){
+            HANDLED_TIME.delete(g.room);
+            postDrawUnlockPending=false;
+            log('  🔁 旧福袋图标已消失，去重已解锁，等待新一轮福袋');
+          }
           // 🔍 每10次采样输出一次 f 的原始值
           dbgCnt++;
           if(dbgCnt%10===1){
@@ -1710,7 +1732,11 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
             //   改为「同一房间时间窗内只处理一次」，窗口见下方说明。
             // 窗口 12 分钟：福袋倒计时实测最长 10 分钟，6 分钟会漏判同一福袋
             // （今日 8199758142 的同一福袋横跨 6 分 53 秒仍被记录多次）。
-            // 福袋实际间隔 30-60 分钟，12 分钟不会误吞新福袋。
+            // 🔁 2026-11-05：守候开奖已走完时会先 delete 本房间的 HANDLED_TIME 记录，
+            //    所以这里天然能处理「开奖后 12 分钟内又发的新福袋」。历史 95 个同房间间隔里
+            //    5 个 <12 分钟，旧逻辑会把它们全部静默吞掉。
+            //    用「开奖完成」而不是「倒计时回升」作分界：新一轮福袋倒计时可能更短，
+            //    「回升」判据会漏掉它；而开奖后旧福袋的 DOM 已消失，不会重复抢同一个。
             const lastTs=HANDLED_TIME.get(g.room)||0;
             if(Date.now()-lastTs < 12*60*1000){
               await sleep(2000); continue;
@@ -1925,6 +1951,18 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
               //    这是可观测性兜底：中奖检测靠文案匹配，一旦文案改版就会静默漏判，
               //    有了这张图至少能事后人工核对「到底中没中」。
               try{ await shot(tab,`h35-DRAWEND-${g.room}-${Date.now()}.png`); }catch(e){}
+              // 🔁 守完开奖后重置停留预算：继续留在本房间等下一个福袋（用户定稿不设轮数上限）。
+              //    不重置的话 elapsed 已含守候的 245~660s，远超 perMs(60s)，while 会立即退出换房。
+              //    每抢一轮就重置一次，只要 POST_DRAW_MS 窗口内还有新福袋就一直循环。
+              if(POST_DRAW_MS>0){
+                postDrawRound++;
+                t0=Date.now(); stayBudget=POST_DRAW_MS; nextDiag=30000;
+                // ⚠ 不在这里立刻 delete 去重记录：实测开奖弹窗比倒计时归零提前 11~44s，
+                //    此刻旧福袋图标可能仍在页面上，立刻解锁会把同一个旧福袋再抢一次。
+                //    改为置标志位，等下面 SCAN 观察到 candCount===0（旧图标消失）后再解锁。
+                postDrawUnlockPending=true;
+                log(`  🔁 开奖后再蹲 ${POST_DRAW_MS/1000}s 看有没有新福袋（第 ${postDrawRound} 轮，不设上限）`);
+              }
             }
             handled=true;
             await sleep(5000);
@@ -1948,7 +1986,9 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
           }
 
           //    ⚠ 2026-11-05 硬卡：跌破门槛一半就走，VIP 不再豁免。
-          if(!handled && !(VIP_EXEMPT && g.isVip) && elapsed>60000 && typeof d.online==='number' && d.online>=0
+          //    ⚠ 2026-11-05 循环蹲守：守完开奖后 handled 恒为 true，若不把 postDrawRound>0
+          //       纳入判据，房间冷到门槛一半以下仍会一直死守到 2 分钟窗口结束。
+          if((!handled || postDrawRound>0) && !(VIP_EXEMPT && g.isVip) && elapsed>60000 && typeof d.online==='number' && d.online>=0
              && d.online < getMinOnline()*0.5){
             log(`🚪 在线${d.online}已跌破门槛${getMinOnline()}的一半，提前换房`);
             break;
