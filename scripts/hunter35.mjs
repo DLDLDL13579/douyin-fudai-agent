@@ -56,10 +56,13 @@ const DRY_FILE=W+'/dry-rooms.json';        // 常驻了却没发现福袋的次�
 //    环境变量仍可覆盖（run-h35.sh 里已不再传，留作应急手段）。
 //    2026-11-03 教训：门槛先后在 run-h35.sh / hunter35.mjs / web/server.mjs 三处硬编码，
 //    改配置时漏了看板那处，用户看到「门槛没改成功」——实际抓取侧早已生效。
-let _THR={day:8000,night:50000,nightStart:19,nightEnd:24};
+let _THR={day:8000,night:50000,nightStart:19,nightEnd:24,vipExempt:false};
 try{ _THR=Object.assign(_THR, JSON.parse(fs.readFileSync(DATA_DIR+'/threshold.json','utf8'))||{}); }catch(e){}
 const MIN_ONLINE_DAY=Number(process.env.DY_MIN_ONLINE_DAY||_THR.day);
 const MIN_ONLINE_NIGHT=Number(process.env.DY_MIN_ONLINE_NIGHT||_THR.night);
+// 📌 2026-11-05 用户要求「按门槛硬卡」：VIP 默认不再豁免 day/night 门槛。
+//    true 才恢复旧的「VIP 只卡 500 人底线」策略；配置在 data/threshold.json 的 vipExempt。
+const VIP_EXEMPT=!!_THR.vipExempt;
 const NIGHT_START=Number(process.env.DY_NIGHT_START||_THR.nightStart);
 const NIGHT_END=Number(process.env.DY_NIGHT_END||_THR.nightEnd);
 
@@ -1358,12 +1361,12 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
         const info = rooms.find(x=>x.room===room);
         const host = info ? (info.host||'') : '';
         if(isOfficial(host)){ log(`  ⛔ ${room} 官方媒体(${host})，跳过`); continue; }
-        // 🎯 VIP 豁免门槛（2026-11-02 实测发现）：
-        //    用户指定的常发福袋主播「琦儿(374806133859)」在播但仅 5927 人，
-        //    被晚间 10000 门槛直接过滤掉，等于把用户最想要的主播排除在外。
-        //    故 VIP 房不受门槛限制，只保留 500 人绝对底线防止刚开播/挂机房空耗。
+        // 🎯 2026-11-05 用户要求「按门槛硬卡」：VIP 不再享受 500 人底线豁免，
+        //    一律按 day/night 门槛。是否放宽由 threshold.json 的 vipExempt 控制。
+        //    ol<0 是「探测时拿不到在线数」：VIP 仍可进候选（进房后实时值在 F 值检测硬卡），
+        //    因为在线数往往进房才解析得到，直接砍会误杀刚开播的大房。
         const VIP_FLOOR=500;
-        const vipExempt = isVip && ol>=VIP_FLOOR;
+        const vipExempt = VIP_EXEMPT && isVip && ol>=VIP_FLOOR;
         if(ol>=0 && ol<minOnline && !vipExempt) continue;
         pool.push({room, online:ol, isVip, host, score:roomScore(host,'',ol,isVip)});
       }
@@ -1684,7 +1687,20 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
           if(dbgCnt%10===1){
             log(`  [f值检查] f=${JSON.stringify(d.fudai)} candCount=${d.candCount} fErr=${d.fErr} online=${d.online}`);
           }
-          if(d.fudai && (d.online<0||d.online>=getMinOnline()||g.isVip)){   // VIP 房豁免门槛，与候选池一致
+          // 🎯 2026-11-05 用户要求「按门槛硬卡」：只有实时在线数达到门槛才参与。
+          //    候选池用首页快照 ol（VIP 主动探测常拿不到在线数 ol=-1，允许进房取实时值），
+          //    这里用进房后实时 d.online，是可信判据，两者口径不同是有意为之。
+          //    硬卡时 d.online<0（解析不到在线数）按「未达标」处理，不再靠 VIP 身份放行。
+          //    VIP_EXEMPT=true 可一键恢复旧策略（VIP 不受门槛、500 人底线）。
+          const onlineOK = VIP_EXEMPT
+            ? (d.online<0 || d.online>=getMinOnline() || g.isVip)
+            : (typeof d.online==='number' && d.online>=getMinOnline());
+          if(d.fudai && !onlineOK){
+            // 硬卡拦截留痕：否则「看见了福袋却不参与」和「根本没福袋」在日志里长得一样，
+            // 又变成 11-03 那种「看不见和没有表现一样」的排查黑洞。每 10 次采样打印一次。
+            if(dbgCnt%10===1) log(`  ⛔ 门槛硬卡跳过福袋: 在线${d.online} < ${getMinOnline()} ${g.isVip?'[VIP]':''} ${disp(g.room)}`);
+          }
+          if(d.fudai && onlineOK){
             // 🔑 只在倒计时充足时尝试（实测剩余不足180秒的福袋点不开面板）
             var secLeft=(typeof d.fudai.sec==='number')?d.fudai.sec:-1;
             if(secLeft>=0 && secLeft<180){ await sleep(2000); continue; }
@@ -1924,13 +1940,15 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
           //    最极端的 805985783749 采集显示 1 万、进房实际只有 24 人——
           //    若还按原来的 60 秒门槛判断，会在这种空房里白白守着。
           //    用 30% 作为阈值（跌七成以上才算异常），避免把正常波动误判。
-          if(!handled && !g.isVip && elapsed>20000 && typeof d.online==='number' && d.online>=0
+          //    vipExempt=false（硬卡）时低人气 VIP 同样立即换房，不白等一整轮常驻。
+          if(!handled && !(VIP_EXEMPT && g.isVip) && elapsed>20000 && typeof d.online==='number' && d.online>=0
              && g.online>0 && d.online < g.online*0.3){
             log(`🚪 进房实际${d.online}人，远低于采集值${g.online}（跌${Math.round((1-d.online/g.online)*100)}%），立即换房`);
             break;
           }
 
-          if(!handled && !g.isVip && elapsed>60000 && typeof d.online==='number' && d.online>=0
+          //    ⚠ 2026-11-05 硬卡：跌破门槛一半就走，VIP 不再豁免。
+          if(!handled && !(VIP_EXEMPT && g.isVip) && elapsed>60000 && typeof d.online==='number' && d.online>=0
              && d.online < getMinOnline()*0.5){
             log(`🚪 在线${d.online}已跌破门槛${getMinOnline()}的一半，提前换房`);
             break;
