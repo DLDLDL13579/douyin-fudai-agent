@@ -216,8 +216,9 @@ function launchChrome(port, profile, { headless = false } = {}) {
     `--user-data-dir=${profile}`,
     '--no-first-run',
     '--no-default-browser-check',
-    '--enable-unsafe-swiftshader',
-    '--use-angle=swiftshader',
+    // ⚠ 2026-11-05 08:04 已证实 SwiftShader 在 headless 下让 GPU 进程空转 260~377% CPU，
+    //    hunter35.mjs 已改 --disable-gpu，这里同步，避免登录用的 Chrome 重蹈覆辙。
+    '--disable-gpu',
     '--disable-dev-shm-usage',
     '--window-size=1280,900',
     '--mute-audio',
@@ -489,11 +490,122 @@ function cmdImportExisting(name = 'default') {
   console.log('\n✅ 导入完成，登录态原样保留。原目录未删除，确认可用后再手工清理。');
 }
 
+/**
+ * 重新扫码登录已有账号（不删账号、不换端口、不丢 profile）。
+ *
+ * 2026-11-05 09:29 事故：main2 的 sessionid/sid_tt/uid_tt 全在、expires 到 2027 年，
+ * 但服务端已判会话失效（页面显示「需先登录，才能开始聊天」、无评论框、福袋不下发）。
+ * 旧自检只看 Cookie 是否存在，盲跑 5 小时；`add` 又拒绝覆盖已有账号，
+ * `refresh` 只补昵称不重新登录 —— 缺一个「原地重登」入口。
+ *
+ * 与 cmdAdd 的区别：
+ *  - 账号必须已存在，端口用 meta.port，profile 原地复用
+ *  - 登录判定不只看 Cookie，还要求 /user/self 能读到抖音号
+ *  - 保留 createdAt 与昵称（读不到时沿用旧值）
+ */
+async function cmdRelogin(name) {
+  if (!name) { console.error('用法: node account-manager.mjs relogin <名字>'); process.exit(1); }
+  const dir = path.join(ACCOUNTS, name);
+  if (!fs.existsSync(dir)) { console.error(`账号「${name}」不存在，请先用 add 添加`); process.exit(1); }
+  const meta = readMeta(name) || {};
+  const port = meta.port || pickPort();
+  const profile = profilePath(name);
+
+  if (profileInUse(profile)) {
+    console.error(`账号「${name}」的 profile 正被占用（Chrome 9751/9750 可能还在跑）。`);
+    console.error(`请先停掉该实例：bash scripts/fudai.sh stop-acc ${name}`);
+    console.error(`停止后再执行 relogin，否则两个 Chrome 抢同一份 profile。`);
+    process.exit(1);
+  }
+
+  console.log(`\n准备为已有账号「${name}」重新扫码登录`);
+  console.log(`  端口: ${port}（保持不变）`);
+  console.log(`  profile: ${profile}（原地复用）`);
+  console.log('⚠️  即将弹出 Chrome 窗口，请用抖音 App 扫码。\n');
+
+  // 清掉已失效的会话 Cookie，避免它还留在 profile 里干扰新登录
+  const chrome = launchChrome(port, profile, { headless: false });
+  try {
+    if (!(await waitPort(port))) throw new Error('Chrome 启动失败，端口未就绪');
+    const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+    const page = list.find((t) => t.type === 'page');
+    const cdp = await CDP.connect(page.webSocketDebuggerUrl);
+    await cdp.send('Network.enable').catch(() => {});
+    await cdp.send('Network.clearBrowserCookies').catch(() => {});
+    await cdp.send('Page.navigate', { url: 'https://live.douyin.com/' });
+    console.log('请在弹出的 Chrome 窗口里点右上角「登录」，用抖音 App 扫码。');
+    console.log('（脚本会自动验证登录态，成功后自动关闭窗口）\n');
+
+    let logged = false;
+    for (let i = 0; i < 120; i++) {
+      await sleep(3000);
+      try {
+        const ck = await cdp.send('Network.getCookies', { urls: ['https://live.douyin.com', 'https://www.douyin.com'] });
+        const names = (ck.result?.cookies || []).map((c) => c.name);
+        if (names.includes('sessionid') && names.includes('sid_tt')) { logged = true; break; }
+      } catch {}
+      if (i % 10 === 0) console.log(`  等待扫码... ${i * 3}s`);
+    }
+    if (!logged) { cdp.close(); throw new Error('等待超时，未检测到登录态'); }
+
+    // 会话级 Cookie 转持久化（Chrome 退出会丢，2026-11-03 踩过）
+    try {
+      const all = await cdp.send('Network.getAllCookies');
+      const sess = (all.cookies || []).filter((c) => !c.expires || c.expires <= 0);
+      let fixed = 0;
+      for (const c of sess) {
+        const ok = await cdp.send('Network.setCookie', {
+          name: c.name, value: c.value, domain: c.domain, path: c.path,
+          secure: !!c.secure, httpOnly: !!c.httpOnly,
+          sameSite: c.sameSite || 'Lax',
+          expires: Math.floor(Date.now() / 1000) + 30 * 24 * 3600,
+        }).catch(() => null);
+        if (ok) fixed++;
+      }
+      console.log(`  已持久化 ${fixed} 条会话级 Cookie（30 天）`);
+    } catch (e) { console.log('  ⚠️ Cookie 持久化失败:', e.message); }
+
+    // 🔴 关键：Cookie 齐全 ≠ 服务端认可。必须验证 /user/self 能读到身份。
+    const ident = await readIdentity(cdp);
+    if (ident.needLogin || (!ident.nickname && !ident.douyinId)) {
+      cdp.close();
+      throw new Error('Cookie 已写入但服务端仍判未登录（' + (ident.err || 'ident.needLogin') + '），请重新扫码');
+    }
+    console.log(`  ✅ 服务端已认可会话：${ident.nickname || '(未知)'} / 抖音号 ${ident.douyinId || '(未知)'}`);
+
+    try { await cdp.send('Browser.close'); } catch {}
+    await sleep(3000);
+    cdp.close();
+
+    writeMeta(name, {
+      ...meta,
+      displayName: meta.displayName || name,
+      port,
+      enabled: true,
+      createdAt: meta.createdAt || new Date().toISOString(),
+      lastLogin: new Date().toISOString(),
+      nickname: ident.nickname || meta.nickname || '',
+      douyinId: ident.douyinId || meta.douyinId || '',
+      loginOk: true,
+    });
+    console.log('\n✅ 重新登录成功。现在可以启动该实例：');
+    console.log(`   bash scripts/fudai.sh start-acc ${name} --force`);
+  } finally {
+    try { chrome.kill('SIGTERM'); } catch {}
+    for (let i = 0; i < 10; i++) {
+      await sleep(400);
+      try { process.kill(chrome.pid, 0); } catch { return; }
+    }
+    try { chrome.kill('SIGKILL'); } catch {}
+  }
+}
+
 const [, , cmd, arg] = process.argv;
 (async () => {
   switch (cmd) {
     case 'list': cmdList(); break;
     case 'add': await cmdAdd(arg); break;
+    case 'relogin': await cmdRelogin(arg); break;
     case 'remove': cmdRemove(arg); break;
     case 'use': cmdUse(arg); break;
     case 'status': await cmdStatus(arg); break;
@@ -505,6 +617,7 @@ const [, , cmd, arg] = process.argv;
 用法:
   node account-manager.mjs list              列出所有账号
   node account-manager.mjs add <名字>        扫码添加新账号（会弹出 Chrome）
+  node account-manager.mjs relogin <名字>    已有账号掉线后原地重新扫码（会弹出 Chrome）
   node account-manager.mjs remove <名字>     删除账号
   node account-manager.mjs use <名字>        设为默认账号
   node account-manager.mjs status [名字]     检查登录态

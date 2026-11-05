@@ -32,17 +32,27 @@ DY_ALIVE_LOG="$LOG_PATH" node -e "
     //   真正的判据不是「长度多少」，而是「长度是否已经稳定」：
     //   连续两次读到 >=350 且相差 <40，才算渲染完成。
     const nap=(ms)=>new Promise(r=>setTimeout(r,ms));
-    let len=0, prev=-1, stable=false;
+    let len=0, prev=-1, stable=false, needLogin=false, commentBox=0;
     for(let a=0;a<8;a++){
-      const d=await send('Runtime.evaluate',{expression:'(document.body.innerText||\"\").length',returnByValue:true});
-      len=d.result.value||0;
+      const d=await send('Runtime.evaluate',{expression:'(()=>{const t=document.body.innerText||\"\";return JSON.stringify({len:t.length,needLogin:/需先登录|请先登录|登录后参与|登录后可参与|登录后才能/.test(t),commentBox:document.querySelectorAll(\"[placeholder*=说点什么],[contenteditable=true]\").length})})()',returnByValue:true});
+      let info={};
+      try{ info=JSON.parse(d.result.value||'{}'); }catch(e){}
+      len=info.len||0;
+      if(info.needLogin) needLogin=true;
+      commentBox=info.commentBox||0;
       if(len>=350 && Math.abs(len-prev)<40){ stable=true; break; }
       prev=len;
       await nap(1800);
     }
-    // 判据优先级：Cookie 是硬证据，页面长度只作辅助（导航瞬间 len 个位数是正常的，
-    // 只有「Cookie 齐全但页面长期只有 300 上下」才可疑 —— 那才是未登录页的特征）
+    // 🔴 服务端判定会话失效：Cookie 字段齐全且有效期很长也可能已经掉线。
+    //    2026-11-05 09:29 实测 main2：sessionid/sid_tt/uid_tt 全在、expires 到 2027 年，
+    //    但页面显示「需先登录，才能开始聊天」、无评论输入框、福袋图标不下发，
+    //    check-alive 却因 Cookie 齐全一直报 OK，导致盲跑 5 小时。
+    //    这一条必须排在 Cookie 判定之前，且不受守候浮层豁免。
+    if(needLogin){ console.log('LOGIN_EXPIRED needLogin=true (Cookie 齐全但服务端已判会话失效，需重新扫码)'); ws.close(); process.exit(2); }
     if(miss.length){ console.log('LOGIN_EXPIRED missing='+miss.join(',')); process.exit(2); }
+    // 页面已稳定渲染但既无评论输入框，属于登录态可疑（守候浮层另走下面的豁免）
+    if(stable && commentBox===0 && len>350){ console.log('LOGIN_SUSPECT no-comment-box len='+len+' (页面正常但无评论框，疑似未登录)'); ws.close(); process.exit(2); }
 
     // 🎯 守候开奖期间页面被开奖浮层占满，innerText 必然变短（实测 600+ → 105），
     //    这恰恰说明系统正常工作。此时不能再用页面长度判断，直接看日志状态。
