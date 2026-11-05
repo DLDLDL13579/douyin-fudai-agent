@@ -150,8 +150,13 @@ for (const r of draws) {
 const roomArr = Object.entries(byRoom).sort((a, b) => b[1].stay - a[1].stay);
 console.log('  ' + pad('房间', 20) + padL('停留min', 10) + padL('次数', 7) + padL('有袋', 7) + padL('参与', 7) + padL('中奖', 7) + padL('再蹲', 7));
 roomArr.slice(0, 12).forEach(([room, v]) => {
-  console.log('  ' + pad(room, 20) + padL((v.stay / 60).toFixed(1), 10) + padL(v.n, 7) + padL(v.fudai, 7) + padL(v.joins || 0, 7) + padL(v.wins || 0, 7) + padL(v.postDraw, 7));
+  // n===0 表示只有 join/draw 事件、还没有 room-exit —— 说明该房间仍在常驻中，
+  // 停留时长尚未结算。明确标注「进行中」，避免读成「0 分钟就换来一次参与」。
+  const stayCell = v.n > 0 ? (v.stay / 60).toFixed(1) : '进行中';
+  console.log('  ' + pad(room, 20) + padL(stayCell, 10) + padL(v.n, 7) + padL(v.fudai, 7) + padL(v.joins || 0, 7) + padL(v.wins || 0, 7) + padL(v.postDraw, 7));
 });
+const ongoingN = roomArr.filter(([, v]) => v.n === 0).length;
+if (ongoingN) console.log('  （' + ongoingN + ' 个房间仍常驻中，停留时长待 room-exit 结算，不计入下方的浪费统计）');
 const waste = roomArr.filter(([, v]) => v.n >= 3 && v.fudai === 0);
 const wasteSec = waste.reduce((t, [, v]) => t + v.stay, 0);
 console.log('  → 常驻≥3 次且 0 福袋的房间 ' + waste.length + ' 个，耗掉 ' + (wasteSec / 3600).toFixed(1) + ' 小时（占总停留 ' + pct(wasteSec, totalStaySec) + '）');

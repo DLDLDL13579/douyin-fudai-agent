@@ -1711,8 +1711,9 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
       log(`选定 ${good.length} 个候选，依次尝试常驻`);
       // 🧠 策略观测：本轮选房结果。用于回答「选房策略有没有把时间花在高产房」。
       //    poolAll/poolPass 记录候选池与门槛通过数，是「门槛该不该调」的反事实线索。
+      // 本轮选房是集合级事件，不属于任何房间，故不带 decisionId；
+      // 用 policyId + hour + at 已足够定位，避免被当成「孤儿房间引用」。
       recStrategy('candidates',{
-        decisionId:newDecisionId(),
         minOnline:getMinOnline(),
         poolAll:rooms.length, poolPass:pool.length, picked:good.length,
         avgScore:good.length?Number((good.reduce((t,x)=>t+x.score,0)/good.length).toFixed(1)):0,
