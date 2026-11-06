@@ -332,6 +332,57 @@ function dedupRows(rows) {
   return out;
 }
 
+/**
+ * 🎯 事件流水专用去重（与统计口径 dedupRows 分开，不要混用）
+ *
+ * 背景：dedupRows 的「房间+账号+12 分钟滑动窗口」是为「今日遭遇」等统计设计的，
+ *   它假设 12 分钟内同一个房间只会有一次福袋遭遇。但 2026-11-05 起开启
+ *   「开奖后循环蹲守 postDrawWaitSec=120」后，同一房间会在一次常驻里连抢多个
+ *   **不同**福袋，间隔常小于 12 分钟，被统计去重整批吃掉 —— 用户看到的是
+ *   「福袋事件没跟上，同一个房间抢的福袋事件不显示」。
+ *
+ * 判据：participations.jsonl 每条都带 cd（福袋倒计时 MM:SS，实测 297/297 覆盖）。
+ *   同一福袋的 cd 只会递减；**cd 回升 = 旧福袋已开奖、新一轮福袋开始**。
+ *   因此只在「同房间+同账号+12 分钟内 且 cd 未回升」时折叠，回升/缺失则保留。
+ *   2026-11-06 实测被旧口径丢掉的 23 条里，20 条是 cd 回升的新福袋，3 条是重复记录。
+ *
+ * ⚠ 统计卡片（stats / byAccount / byRoom / hourBuckets）仍用 dedupRows，
+ *   保持保守口径不虚高；只有 recentEvents / recentJoins 用本函数。
+ */
+function dedupEventRows(rows) {
+  const WIN = 12 * 60 * 1000;
+  const cdSec = (cd) => {
+    if (typeof cd !== 'string' || !/^\d{1,2}:\d{2}$/.test(cd)) return -1;
+    const [m, s] = cd.split(':').map(Number);
+    return m * 60 + s;
+  };
+  const last = new Map();       // 房间+账号 -> { t, cd, nearZero } 上一轮福袋
+  const out = [];
+  const sorted = [...rows].sort((a, b) => new Date(a.at || 0).getTime() - new Date(b.at || 0).getTime());
+  for (const r of sorted) {
+    const room = (r.url || '').split('/').pop() || '';
+    const t = new Date(r.at || 0).getTime();
+    if (!t) { out.push(r); continue; }
+    const key = room + '|' + (r.account || 'default');
+    const cd = cdSec(r.cd);
+    const prev = last.get(key);
+    // 上一轮已出现接近归零的 cd（旧福袋快开奖/已开奖），之后再来大 cd 必是新一轮。
+    // 这堵住「09:59 → 03:00 → 09:57」这类：后半段看似递减、实为新福袋的边界。
+    const resetByNearZero = prev && prev.nearZero && cd > 300;
+    // 同一福袋：时间在窗口内、两次 cd 都有效、新 cd 未回升，且不是新一轮
+    const sameFudai = !resetByNearZero && prev && Math.abs(t - prev.t) < WIN
+                   && cd >= 0 && prev.cd >= 0 && cd <= prev.cd;
+    if (sameFudai) {
+      // 折叠也要推进基准，让后续判断基于最新采样，而不是停留在新福袋刚弹出的高 cd
+      last.set(key, { t: prev.t, cd, nearZero: prev.nearZero || (cd >= 0 && cd < 120) });
+      continue;
+    }
+    last.set(key, { t, cd, nearZero: cd >= 0 && cd < 120 });
+    out.push(r);
+  }
+  return out;
+}
+
 function buildStatus() {
   const NAMES = loadNames();
   const dispRoom = (room) => {
@@ -343,7 +394,10 @@ function buildStatus() {
   const ports = chromePorts();
   const accs = accountsInfo();
 
+  // 统计口径：保守去重（今日遭遇/参与率/分账号战绩等）
   const rows = dedupRows([...readJsonl(PATHS.participations), ...readJsonl(PATHS.legacy).map((r) => ({ ...r, account: 'default' }))]);
+  // 事件流水口径：按「cd 回升 = 新福袋」细粒度去重，保证同房间连抢的每次福袋都显示
+  const eventRows = dedupEventRows([...readJsonl(PATHS.participations), ...readJsonl(PATHS.legacy).map((r) => ({ ...r, account: 'default' }))]);
   const wins = readJsonl(PATHS.wins);
   const today = localDay();
   const accLabels = accountLabels(accs);
@@ -613,7 +667,7 @@ function buildStatus() {
       }
       return h.map((v, i) => ({ hour: i, total: v.total, joined: v.joined }));
     })(),
-    recentEvents: rows
+    recentEvents: eventRows
       .sort((a, b) => String(b.at).localeCompare(String(a.at)))
       .slice(0, 15)
       .map((r) => ({
@@ -628,7 +682,7 @@ function buildStatus() {
         accountShort: (accLabels[r.account || 'default'] || {}).nickname
                       || (r.account === 'default' ? '主实例' : (r.account || 'default')),
       })),
-    recentJoins: rows
+    recentJoins: eventRows
       .filter((r) => r.result === 'joined' || r.result === 'maybe-joined')
       .sort((a, b) => String(b.at).localeCompare(String(a.at)))
       .slice(0, 12)
