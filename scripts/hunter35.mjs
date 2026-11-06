@@ -375,6 +375,50 @@ async function detectPacketPanel(tab){
   }catch(e){ return {found:false,err:String(e.message).slice(0,60)}; }
 }
 
+// 🧧 关闭人气红包面板（2026-11-06 10:22 用户纠正后新增）。
+//    旧逻辑识别到红包就 return，粉色全屏面板不关，会把同排后面的福袋图标全挡住，
+//    导致「福袋和红包同排」时真福袋再也点不开。关闭后才允许继续试下一个候选。
+//    红包面板在 iframe 里，关按钮用 DOM.performSearch 跨 frame 找「× / 关闭」，
+//    拿 getBoxModel 主视口绝对坐标点击；找不到就退而求其次按 Esc / 点面板外侧。
+async function closePacketPanel(tab){
+  try{
+    await tab.cdp.send('DOM.getDocument',{depth:-1,pierce:true},30000);
+    // 先确认红包面板还在；不在就什么都不做，避免误伤页面上的其他 × 按钮
+    const chk=await tab.cdp.send('DOM.performSearch',{query:'人气红包',includeUserAgentShadowDOM:true},15000);
+    if(chk.resultCount)await tab.cdp.send('DOM.discardSearchResults',{searchId:chk.searchId}).catch(()=>{});
+    if(!chk.resultCount) return {closed:true,how:'already-closed'};
+
+    const r=await tab.cdp.send('DOM.performSearch',{query:'×',includeUserAgentShadowDOM:true},20000);
+    if(r.resultCount){
+      const g=await tab.cdp.send('DOM.getSearchResults',{searchId:r.searchId,fromIndex:0,toIndex:Math.min(r.resultCount,8)},20000);
+      await tab.cdp.send('DOM.discardSearchResults',{searchId:r.searchId}).catch(()=>{});
+      for(const nid of g.nodeIds||[]){
+        try{
+          const bm=await tab.cdp.send('DOM.getBoxModel',{nodeId:nid},12000);
+          const q=bm?.model?.content; if(!q||q.length<8)continue;
+          const w=Math.round(bm.model.width), h=Math.round(bm.model.height);
+          // 红包面板的关闭圈实测约 24~40px；商品卡/弹幕的 × 多为 12px 以下或长条形
+          if(w<16||w>60||h<16||h>60||Math.abs(w-h)>12)continue;
+          const cx=Math.round((q[0]+q[2]+q[4]+q[6])/4), cy=Math.round((q[1]+q[3]+q[5]+q[7])/4);
+          // 关闭圈在粉色面板下方居中区域（19:21 截图实测 x≈560,y≈590），排除左上角图标区
+          if(cx<300||cx>1000||cy<200||cy>750)continue;
+          await clickXY(tab,cx,cy); await sleep(600);
+          const a=await tab.cdp.send('DOM.performSearch',{query:'人气红包',includeUserAgentShadowDOM:true},15000);
+          if(a.resultCount)await tab.cdp.send('DOM.discardSearchResults',{searchId:a.searchId}).catch(()=>{});
+          return {closed:a.resultCount===0,how:'x-btn'};
+        }catch(e){}
+      }
+    }else{
+      await tab.cdp.send('DOM.discardSearchResults',{searchId:r.searchId}).catch(()=>{});
+    }
+    // 兜底只发 Esc，绝不盲点页面中部（会误触礼物/弹幕/商品卡）
+    await tab.cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27}).catch(()=>{});
+    await tab.cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27}).catch(()=>{});
+    await sleep(400);
+    return {closed:false,how:'esc-only'};
+  }catch(e){ return {closed:false,how:'err',err:String(e.message).slice(0,50)}; }
+}
+
 const SCAN=`(()=>{
   var b=document.body.innerText||'';
   // 在线人数有两种文案：
@@ -401,13 +445,20 @@ const SCAN=`(()=>{
   var f=null, fErr=null, fAll=[];
   try{
     if(cands.length){
+      // ⚠ 2026-11-06 10:22 用户纠正：「红包和福袋是在一排的，福袋位置也不固定，
+      //   重点是识别福袋，红包是不去抢的」。19:21 完整 DOM 实测同排结构为：
+      //     ShortTouchContainer > __biz(TLPz67YJ) > div.redpacket   ← 人气红包位（iframe）
+      //     ShortTouchContainer > __biz           > LMUtLyr9+倒计时  ← 福袋位
+      //   两张历史截图里倒计时一个在左、一个在右，位置确实不固定。
+      //   SCAN 只认 LMUtLyr9（福袋位）是对的，不能靠坐标/第几个图标判断。
+      //   但旧逻辑优先只留有倒计时的候选，会把「不带倒计时的福袋」整个丢掉，
+      //   且只取前 4 个；现改为整排全收，有倒计时的按倒计时升序在前，
+      //   无倒计时的排后面但绝不丢弃，由 tryJoin 逐个用「面板文案」验证真伪。
       var wc=cands.filter(function(c){return c.hasCd===true;});
-      var pool=(wc.length>0)?wc:cands;
-      // ⚠ 20:48 吕德华实测：页面同时出现 2 个福袋（05:34 和 09:50），
-      //   旧逻辑只取一个，另一个完全不管。改为按倒计时升序全部返回，
-      //   由 tryJoin 依次尝试（先抢快结束的）。
-      pool.sort(function(a,b){return (a.sec<0?99999:a.sec)-(b.sec<0?99999:b.sec);});
-      fAll=pool.slice(0,4);
+      var nc=cands.filter(function(c){return c.hasCd!==true;});
+      wc.sort(function(a,b){return a.sec-b.sec;});
+      var pool=wc.concat(nc);
+      fAll=pool.slice(0,6);
       f=pool[0]||null;
     }
   }catch(e){ fErr=String(e&&e.message||e); }
@@ -773,23 +824,27 @@ async function tryJoin(tab,f,url,online){
   const out={url,online,cd:f.cd,cw:f.cw,result:null,steps:[]};
   const CURRENT_ROOM=url.split('/').pop();   // 供消费记录使用
   await shot(tab,`h35-${url.split('/').pop()}-${Date.now()}.png`);
-  // pointer-events 修复
-  await ev(tab,`(()=>{var el=document.querySelector('[class*="LMUtLyr9"]');if(!el)return 0;
-    var a=el;for(var i=0;i<10&&a;i++){if(getComputedStyle(a).pointerEvents==='none')a.style.pointerEvents='auto';a=a.parentElement;}
+  // pointer-events 修复：只修本次要点的那个图标，不再无条件取第一个 LMUtLyr9
+  //    （同排有多个福袋时，旧写法修的是别人的 DOM）
+  await ev(tab,`(()=>{var all=[...document.querySelectorAll('[class*="LMUtLyr9"]')];
+    var el=all.find(function(e){var r=e.getBoundingClientRect();
+      return Math.abs(r.x-${f.x})<6&&Math.abs(r.y-${f.y})<6;})||all[0];
+    if(!el)return 0; var a=el;
+    for(var i=0;i<10&&a;i++){if(getComputedStyle(a).pointerEvents==='none')a.style.pointerEvents='auto';a=a.parentElement;}
     el.style.pointerEvents='auto';return 1;})()`);
   await ensureDom(tab);
 
   const cy=f.y+Math.round(f.h/2), cx=f.x+Math.round(f.w/2);
-  // 🔑 20:48 吕德华实测：SCAN 报的 f.x=120/cw=164，但截图里福袋图标实际在 x≈20，
-  //   容器比例算出来的点全落在空白处，5 次点击全失败（no-panel）。
-  //   改为「以真实图标矩形为中心、向四周扩一圈网格」，覆盖 hover 展开后的位移。
+  // 🔑 2026-11-06 10:22 用户纠正：福袋和人气红包在同一排、位置不固定。
+  //    旧版有「左外扩 x-18」「左上 x-10,y-8」「下方 y+h+6」这三个越界点，
+  //    图标靠左时会落到旁边那个 redpacket 红包位上，点开的是红包面板而不是福袋。
+  //    现只保留图标矩形内部的点，绝不越界，靠「面板文案」而不是坐标区分福袋/红包。
   const positions = [
-    {n:'图标中心',x:cx,y:f.y+Math.round(f.h/2)},
-    {n:'图标左',  x:f.x+4,              y:f.y+Math.round(f.h/2)},
-    {n:'图标右',  x:f.x+f.w-4,          y:f.y+Math.round(f.h/2)},
-    {n:'左外扩',  x:Math.max(2,f.x-18), y:f.y+Math.round(f.h/2)},
-    {n:'左上',    x:Math.max(2,f.x-10), y:Math.max(2,f.y-8)},
-    {n:'下方',    x:cx,                 y:f.y+f.h+6},
+    {n:'图标中心',x:cx,         y:cy},
+    {n:'图标左',  x:f.x+4,      y:cy},
+    {n:'图标右',  x:f.x+f.w-4,  y:cy},
+    {n:'图标上',  x:cx,         y:f.y+4},
+    {n:'图标下',  x:cx,         y:f.y+f.h-4},
   ];
 
   let btn={cnt:0,ids:[]};
@@ -811,35 +866,38 @@ async function tryJoin(tab,f,url,online){
     }
     if(btn.cnt>0){out.steps.push('btn@'+pos.n);break;}
 
-    // 🧧 人气红包（2026-11-05 19:51 事故修复，用户定稿「不抢人气红包」）
-    //    面板长得和普通福袋完全不同：【xxx】的人气红包 / 价值 5999 / 圆形「抢」按钮（需 1 钻）
-    //    / 底部「送人气票 可抢红包」。旧版用主 frame 的 body.innerText 判「人气红包」，
-    //    但面板在 iframe 里 → 上线起 0 次命中 → 6 个位置全落空后误报 no-panel。
-    //    现改用 detectPacketPanel 走 CDP DOM 域（跨 iframe + shadow DOM），
-    //    并按 packet-config.json 的 grabEnabled 决定是否点「抢」：
-    //      默认 false = 只截图留证、记真实结果 packet-skipped，不消耗抖币、不再试其他位置
-    //      true     = 用 getBoxModel 的主视口绝对坐标点圆形「抢」，并验证参与结果
+    // 🧧 人气红包（2026-11-06 10:22 用户纠正后重构，定稿「不抢人气红包」）
+    //    用户原话：「红包和福袋是在一排的，福袋位置也不固定，重点是识别福袋，红包是不去抢的」。
+    //    红包面板在 iframe 里，用 detectPacketPanel 走 CDP DOM 域双判据识别。
+    //
+    //    ⚠ 旧逻辑一识别到红包就 `return packet-skipped` 终止整轮，两个致命后果：
+    //      1) 粉色全屏面板不关，同排后面的福袋图标全被挡住，再也点不开
+    //      2) 主循环拿到 packet-skipped 就写 12 分钟长窗，真福袋被锁死
+    //    现改为：**关面板 → 记一次 → continue 到下一个点击位置/下一个福袋候选**，
+    //    只有「所有候选都只弹出红包、没有任何福袋面板」才由主循环记 packet-skipped。
     const pk=await detectPacketPanel(tab);
     if(pk.found){
+      out.packetSeen=(out.packetSeen||0)+1;
       out.steps.push('packet@'+pos.n);
       out.packetDiag={hits:pk.hits,grab:pk.grab?{x:pk.grab.x,y:pk.grab.y,w:pk.grab.w,h:pk.grab.h}:null};
-      await shot(tab,`h35-PACKET-${url.split('/').pop()}-${Date.now()}.png`);
+      // 每个候选只截一次红包留证，避免同排 6 个候选堆 6 张图
+      if(out.packetSeen===1) await shot(tab,`h35-PACKET-${url.split('/').pop()}-${Date.now()}.png`);
       if(!PACKET_GRAB){
-        out.steps.push('packet-skipped:by-config');
-        out.result='packet-skipped';
-        log(`  🧧 人气红包已识别（${JSON.stringify(pk.hits)}），按配置不抢，记真实结果 packet-skipped`);
-        return out;
+        out.steps.push('packet-skip:close-and-continue');
+        const cl=await closePacketPanel(tab);
+        out.steps.push('packet-close:'+cl.how+(cl.closed?'':'!'));
+        log(`  🧧 人气红包面板已识别（${JSON.stringify(pk.hits)}），按配置不抢；关面板后继续找同排福袋`);
+        continue;                       // 关键：不 return，继续试下一个点/下一个福袋
       }
       if(!pk.grab){
         out.steps.push('packet-grab:no-btn');
-        out.result='packet-skipped';
-        log('  🧧 人气红包已识别但没定位到圆形「抢」按钮，不尝试点击');
-        return out;
+        log('  🧧 人气红包已识别但没定位到圆形「抢」按钮，关面板后继续找福袋');
+        await closePacketPanel(tab);
+        continue;
       }
       log(`    🧧 人气红包: 点击「抢」@${pk.grab.x},${pk.grab.y}（主视口绝对坐标）`);
       await clickXY(tab,pk.grab.x,pk.grab.y);
       await sleep(3500);
-      // 验证同样要跨 iframe：用 DOM.performSearch 看红包文案是否消失/出现成功文案
       const verify=await (async()=>{
         try{
           await tab.cdp.send('DOM.getDocument',{depth:-1,pierce:true},30000);
@@ -849,6 +907,7 @@ async function tryJoin(tab,f,url,online){
         }catch(e){return {err:String(e.message).slice(0,40)};}
       })();
       out.packetVerify=verify;
+      await closePacketPanel(tab);
       if(verify.done>0||(verify.packet===0)){
         out.steps.push('packet-grab:ok');
         out.result='joined';
@@ -856,8 +915,7 @@ async function tryJoin(tab,f,url,online){
         return out;
       }
       out.steps.push('packet-grab:unverified');
-      out.result='packet-skipped';
-      return out;
+      continue;
     }
 
     const fans=await pSearch(tab,'加入粉丝团');
@@ -996,6 +1054,15 @@ async function tryJoin(tab,f,url,online){
       out.result = fj.noCoins ? 'fans-no-coins' : 'fans-unverified';
       return out;
     }
+  }
+  // 🧧 所有点击位置都试完仍没找到「福袋面板」：
+  //    若这一轮至少弹过一次人气红包面板，说明这个候选其实是红包位（或红包遮罩挡住了），
+  //    返回 packet-only 让主循环继续试同排下一个 LMUtLyr9，而不是立刻写 12 分钟长窗。
+  //    只有全部候选都 packet-only / no-panel 时，主循环才统一收敛为 packet-skipped。
+  if(out.packetSeen>0 && btn.cnt===0){
+    out.result='packet-only';
+    out.steps.push('packet-only:try-next-candidate');
+    return out;
   }
   out.result='no-panel';
   // 🔍 诊断：记录页面当时的状态，便于分析为什么点不开面板
@@ -1998,15 +2065,29 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
                 }
               }
             }
-            // 多个福袋依次尝试（20:48 吕德华实测同屏 2 个：05:34 和 09:50）
-            // 先抢剩余时间短的；第一个成功就停，避免无谓点击。
+            // 同排多个图标依次尝试（2026-11-06 10:22 用户纠正：福袋和红包同一排、位置不固定）
+            // 先试有倒计时的、按剩余时间升序；无倒计时的排后面也要试。
+            // ⚠ 判据是「点开后面板文案」，不是坐标、不是第几个图标：
+            //   红包面板 → tryJoin 关面板并返回 packet-only → 继续试下一个候选；
+            //   福袋面板 → joined / need-follow / fans-* 等 → 按原逻辑处理。
+            //   只有所有候选都没弹出福袋面板、且至少见过一次红包，才收敛成 packet-skipped。
             const _all=(Array.isArray(d.fudaiAll)&&d.fudaiAll.length)?d.fudaiAll:[d.fudai];
+            let _packetOnly=0;
             if(_followPass) for(let _i=0;_i<_all.length;_i++){
               const _f=_all[_i];
-              if(_i>0) log(`  ↪ 尝试第 ${_i+1} 个福袋（剩余 ${_f.sec}s）`);
+              if(_i>0) log(`  ↪ 尝试同排第 ${_i+1} 个图标（${_f.hasCd?'剩余 '+_f.sec+'s':'无倒计时'}）`);
               r=await tryJoin(tab,_f,`https://live.douyin.com/${g.room}`,d.online);
+              // packet-only 是「这个位置是红包」的中间态，不写参与记录、不写长窗，
+              //   继续找同排的福袋；否则一条 packet-only 会污染统计并锁死真福袋。
+              if(r.result==='packet-only'){ _packetOnly++; r=null; continue; }
               rec(r);
               if(r.result==='joined'||r.result==='maybe-joined') break;
+            }
+            if(!r && _packetOnly>0){
+              r={result:'packet-skipped',steps:['all-candidates-packet-only:'+_packetOnly],
+                 url:`https://live.douyin.com/${g.room}`,online:d.online};
+              rec(r);
+              log(`  🧧 同排 ${_all.length} 个候选均为人气红包，按配置不抢`);
             }
             if(!r) r={result:'no-panel',steps:['no-candidate']};
             // 更新主播档案（记忆：这间房什么时候发过什么类型的福袋）
