@@ -1653,3 +1653,66 @@ C 动作维度（循环蹲守收益、门槛拦截反事实）、D 参数版本�
 
 另外：报告口径与埋点口径是两份独立实现（一个在采集侧、一个在读侧），
 修判据时**必须同步改两处**，否则历史数据折叠结果与新数据写入结果会分叉。
+
+## 2026-11-06 09:39：删除 main2、改用 main3（9752），自检日志映射改为动态反查
+
+用户指令：`删掉福袋 main2 ·，运行福袋 main3·`。
+
+### 执行前的现状盘点
+
+`main3` 其实已在 **09:36 由另一会话建好**：`port 9752`、`loginOk:true`、
+与 main2 **同一个抖音号**（看板昵称尾号 4017，此处不写明文）、profile 151M / 933 文件齐全，
+只差没启动。`main2` 1.1G（profile + 93 个 work 文件），`meta.json` 显示 9751，
+但 9751 早已不监听、无残留进程。当前只有主实例 9750 在跑。
+
+**先验证服务端登录态再动手**：`node scripts/account-manager.mjs status main3`
+返回 `登录态: ✅ 有效 / cookie 50 个，关键项 sessionid, sid_tt, ttwid`。
+这一步走的是 `/user/self` 身份接口，不是只看 Cookie 名字 —— 按 11-05 09:29 的教训，
+Cookie 齐全 ≠ 服务端认可会话，直接启动可能又白跑几小时。
+
+### 顺手挖出的必改项：`check-alive.sh` 端口映射写死
+
+旧版只有 `9751 → accounts/main2/work/h35.log`，其余一律落到主实例日志。
+9752 会被当成「其它」去读 `douyin-auto/h35.log` —— 正是 11-05 02:57 那个
+「9751 页面 len=20 空页，却因主实例在守候而报假 OK」的老坑换了个端口号复发。
+
+改为**按 `accounts/*/meta.json` 的 `port` 反查账号目录**，不再写死：
+
+```bash
+DEFAULT_LOG="$ROOT_DIR/douyin-auto/h35.log"
+if [ "$PORT" != "9750" ]; then
+  ACC_DIR="$(node -e "…遍历 accounts/*/meta.json，找 port===$PORT 的账号…")"
+  [ -n "$ACC_DIR" ] && DEFAULT_LOG="$ACC_DIR/work/h35.log"
+fi
+```
+
+验证求值：`9750→douyin-auto/h35.log`、`9751→accounts/main2/work/h35.log`（兼容）、
+`9752→accounts/main3/work/h35.log`、`9999→主实例日志兜底`。账户增删后无需再改脚本。
+
+### 执行与验证
+
+| 步骤 | 结果 |
+|:---|:---|
+| `node scripts/account-manager.mjs remove main2` | 目录已删，`accounts/` 只剩 `main main3` |
+| `bash scripts/fudai.sh start-acc main3` | 2 秒就绪，无需 `--force`（空闲 968MB 够） |
+| 进程/端口 | hunter 2、supervisor 2、**9750+9752 监听、9751 已清零** |
+| 首次采集 | 09:44:25 选定 4 候选并常驻 `文鼎（文说股市）` 在线 50000 |
+| **`bash scripts/check-alive.sh 9752`** | **`OK len=686 (cookie 齐全)`** ✅ 读的是 main3 自己的日志 |
+| 看板 API | `byAccount` 两个号都列出（主号 20/17 + 新账号 0/0，昵称不写明文），合计 20 = `stats.todayTotal`；响应 7 处 `main3`、**0 处 `main2`** |
+| 资源 | load 5.63、free 65%、磁盘 7.7Gi |
+
+`main3` 刚启动 0 战绩属预期。`main2` 与 `main3` 是同一抖音号，删掉不丢账号身份。
+
+### ⚠ 遗留待办：主实例仍在跑旧源码
+
+- `main3` 09:42 启动 > 源码 mtime 09:32 → **已带修好的 gate-skip 去重逻辑**
+- 主实例 9750 仍是 **03:47** 启动 → 仍在写重复 gate-skip（报告会自动折叠，不影响结论正确性）
+- 09:41 主实例刚开出「未中奖弹窗」、当前已回到巡房，是合适重启窗口，
+  但用户本次只要求删 main2 / 启 main3，**未授权重启主实例，故未动**。
+  若之后重启，用 `bash scripts/fudai.sh restart`（main-only），绝不 `stop + start`。
+
+### 教训
+
+**账号可增删时，任何「端口 → 目录」的静态映射都会过期。**
+这类映射必须从 `meta.json` 反查，且要在**启动新实例之前**改完 —— 否则新实例一上线，
+自检就在读错日志，且表现为「一切 OK」的假绿灯。
