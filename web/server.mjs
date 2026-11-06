@@ -50,7 +50,6 @@ const PATHS = {
   wins: path.join(ROOT, 'data', 'wins.jsonl'),
   legacy: path.join(ROOT, 'douyin-auto', 'h35-results.jsonl'),
   log: path.join(ROOT, 'douyin-auto', 'h35.log'),
-  shouldFollow: path.join(ROOT, 'douyin-auto', 'should-follow.md'),
   roundCounter: path.join(ROOT, 'douyin-auto', 'round-counter.txt'),
 };
 
@@ -443,12 +442,6 @@ function buildStatus() {
     logAgeSec = Math.round((Date.now() - st.mtimeMs) / 1000);
   } catch {}
 
-  let follow = [];
-  try {
-    const t = fs.readFileSync(PATHS.shouldFollow, 'utf8');
-    follow = (t.match(/^- \[ \] .*$/gm) || []).slice(0, 10);
-  } catch {}
-
   return {
     now: new Date().toISOString(),
     procs, ports,
@@ -498,6 +491,90 @@ function buildStatus() {
       allJoined: rows.filter((r) => r.result === 'joined' || r.result === 'maybe-joined').length,
       allWins: wins.length,
     },
+    // 📊 历史总数据（2026-11-06 用户要求：把「主播档案（累计）」卡片换成全局累计）
+    //    ⚠ 口径与 stats.allTotal/allJoined 完全一致：都用 dedupRows 后的 rows，
+    //      避免同一房间 12 分钟内重复采样把「历史」算虚高。
+    //    ⚠ 分账号含已删除账号的历史记录（main2 27 条），这是真实发生过的战绩，不能抹掉。
+    history: (() => {
+      const isJoined = (r) => r.result === 'joined' || r.result === 'maybe-joined';
+      const total = rows.length;
+      const joinedN = rows.filter(isJoined).length;
+
+      // 运行天数：按本地日去重（不能直接用 UTC 日期，凌晨 0-8 点会错位）
+      const daySet = new Set();
+      let firstAt = null, lastAt = null;
+      for (const r of rows) {
+        if (!r.at) continue;
+        const d = new Date(r.at);
+        if (Number.isNaN(d.getTime())) continue;
+        if (!firstAt || r.at < firstAt) firstAt = r.at;
+        if (!lastAt || r.at > lastAt) lastAt = r.at;
+        const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000);
+        daySet.add(local.toISOString().slice(0, 10));
+      }
+
+      // 分账号累计：沿用 accountLabels 的昵称映射，与今日战绩标签一致
+      const accMap = {};
+      for (const r of rows) {
+        const k = r.account || 'default';
+        const e = accMap[k] || (accMap[k] = { account: k, label: labelOfAccount(k, accLabels), total: 0, joined: 0 });
+        e.total++;
+        if (isJoined(r)) e.joined++;
+      }
+      const byAcc = Object.values(accMap).sort((a, b) => b.joined - a.joined)
+        .map((e) => ({ ...e, rate: e.total ? Math.round(e.joined / e.total * 100) : 0 }));
+
+      // 结果分布（累计）：与今日 byResult 同口径，直接给真实标签便于对照
+      const byRes = {};
+      for (const r of rows) {
+        const k = r.result || 'unknown';
+        byRes[k] = (byRes[k] || 0) + 1;
+      }
+
+      // 开奖与执行能力累计：文件不存在视为 0，不补造历史
+      const readAll = (f) => {
+        try { return readJsonl(path.join(ROOT, 'data', f)); } catch { return []; }
+      };
+      const lossesN = readAll('losses.jsonl').length;
+      const acts = readAll('exec-actions.jsonl');
+      const followOk = acts.filter((r) => r.action === 'follow' && r.ok).length;
+      const fansOk = acts.filter((r) => r.action === 'fans' && r.ok).length;
+
+      // 主播档案规模：从 anchors.json 取全局计数，不再展示逐房间明细
+      let anchorTotal = 0, anchorKnown = 0;
+      try {
+        const an = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'anchors.json'), 'utf8')) || {};
+        const av = Object.values(an);
+        anchorTotal = av.length;
+        anchorKnown = av.filter((v) => (v.fudaiTotal || 0) > 0).length;
+      } catch {}
+
+      // 累计轮次：主实例 + 各账号实例，都从各自 work 目录读
+      let rounds = 0;
+      try { rounds += Number(fs.readFileSync(PATHS.roundCounter, 'utf8').trim()) || 0; } catch {}
+      try {
+        const accRoot = path.join(ROOT, 'accounts');
+        for (const n of fs.readdirSync(accRoot)) {
+          const f = path.join(accRoot, n, 'work', 'round-counter.txt');
+          try { rounds += Number(fs.readFileSync(f, 'utf8').trim()) || 0; } catch {}
+        }
+      } catch {}
+
+      return {
+        total, joined: joinedN,
+        rate: total ? (joinedN / total * 100).toFixed(1) : '0.0',
+        wins: wins.length, losses: lossesN,
+        draws: wins.length + lossesN,
+        days: daySet.size, firstAt, lastAt,
+        followOk, followTotal: acts.filter((r) => r.action === 'follow').length,
+        fansOk, fansTotal: acts.filter((r) => r.action === 'fans').length,
+        anchorTotal, anchorKnown, rounds,
+        byAcc,
+        byResult: Object.entries(byRes)
+          .sort((a, b) => b[1] - a[1])
+          .map(([k, v]) => ({ key: k, n: v })),
+      };
+    })(),
     byResult,
     roomRank: Object.entries(byRoom)
       .filter(([, v]) => v.joined > 0)
@@ -556,41 +633,6 @@ function buildStatus() {
     currentRoom,
     currentRoomName: dispRoom(currentRoom),
     currentOnline,
-    anchors: (() => {
-      try {
-        const a = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'anchors.json'), 'utf8'));
-        // 排序权重：历史福袋数占主导，但访问次数也参与（让正在学习的新房间可见）
-        // 权重 = 福袋数×10 + 访问次数，这样既保留历史金矿，又能看到学习中的房间
-        return Object.entries(a)
-          .filter(([, v]) => (v.fudaiTotal || 0) > 0 || (v.visits || 0) > 0)
-          .sort((x, y) => {
-            // 权重：福袋数×5 + 访问次数×3
-            // 目的：让「被反复访问但没福袋」的房间也能进入视野（这正是学习的关键样本），
-            //      同时历史金矿仍然靠前（45×5=225 分远高于任何新房间）
-            const sx = (x[1].fudaiTotal || 0) * 5 + (x[1].visits || 0) * 3;
-            const sy = (y[1].fudaiTotal || 0) * 5 + (y[1].visits || 0) * 3;
-            return sy - sx;
-          })
-          .slice(0, 16)
-          .map(([room, v]) => ({
-            room,
-            host: (NAMES[room] || v.host || ''),
-            total: v.fudaiTotal,
-            joinable: v.joinable || 0,
-            fans: v.fans || 0,
-            visits: v.visits || 0,
-            // ⚠ visits 是本系统启动后累计的访问次数，而 fudaiTotal/joinable 是从历史
-            //   h35-results.jsonl 导入的累计值，两者统计周期完全不同。直接相除会算出
-            //   荒谬的 >100%：实测锦一电台 visits=22、fudaiTotal=45 → 「发袋率 205%」。
-            //   只有「福袋数不超过访问次数」时才认为二者同源、才给百分比；
-            //   否则只显示累计数，不给比值。
-            rate: (v.visits > 0 && (v.fudaiTotal || 0) <= v.visits)
-                    ? Math.round((v.fudaiTotal || 0) / v.visits * 100) : null,
-            topHours: Object.entries(v.hourly || {})
-              .sort((m, n) => n[1] - m[1]).slice(0, 3).map(([h]) => h + '点'),
-          }));
-      } catch { return []; }
-    })(),
     // 📌 用户指定的常发福袋主播状态（来源：关注主播名单.md）
     //    这块是用户最关心的信息：我指定的主播现在在播吗？盯了多久？为什么没抢到？
     //    数据来自 vip-cooldown.json（冷却）、anchors.json（档案）和日志尾部（最近探测结果）。
@@ -700,7 +742,6 @@ function buildStatus() {
         .sort((a, b) => String(b.at).localeCompare(String(a.at)));
       return js.length ? js[0].at : null;
     })(),
-    follow,
   };
 }
 
@@ -758,10 +799,6 @@ const HTML = `<!DOCTYPE html>
   #log { max-height:220px; overflow-y:auto; }
   .two-col { display:flex; gap:20px; flex-wrap:wrap; }
   .two-col > div { min-width:180px; }
-  .anchor-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(155px,1fr)); gap:8px; }
-  .anchor-item { background:#0d0f14; border:1px solid var(--line); border-radius:7px; padding:8px 10px; }
-  .anchor-name { font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; margin-bottom:3px; }
-  .anchor-stat { font-size:11px; font-variant-numeric:tabular-nums; }
   @media (max-width: 560px) {
     body { padding:12px; padding-bottom:calc(12px + env(safe-area-inset-bottom)); font-size:13px; }
     .two-col { flex-direction:column; gap:14px; }
@@ -852,14 +889,14 @@ const HTML = `<!DOCTYPE html>
     .main {
       grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);
       grid-template-rows:1fr 1fr 1fr;
-      grid-template-areas:"events pinned" "log account" "learn anchors";
+      grid-template-areas:"events pinned" "log account" "learn history";
     }
     .main > .card:nth-child(1){ grid-area:events; }
     .main > .card:nth-child(2){ grid-area:pinned; }
     .main > .card:nth-child(3){ grid-area:account; }
     .main > .card:nth-child(4){ grid-area:log; }
     .main > .card:nth-child(5){ grid-area:learn; }
-    .main > .card:nth-child(6){ grid-area:anchors; }
+    .main > .card:nth-child(6){ grid-area:history; }
   }
   @media (max-width:900px){
     /* ⚠ 单列轨道必须 minmax(0,1fr)：裸 1fr 的 min-width:auto 会被
@@ -879,8 +916,8 @@ const HTML = `<!DOCTYPE html>
     .main > .card { grid-area:auto !important; }
     .scroll { overflow:visible; overflow-x:hidden; }
     .kpi { grid-template-columns:repeat(2,minmax(0,1fr)); }
-    /* 手机上主播档案动辄几十行，整张卡片 1200px+ 会把后面所有内容顶到屏幕外，
-       限高并交给卡片内部滚动，用户仍可上下滑看完整档案。 */
+    /* 手机上历史总数据指标较多，整张卡片过高会把后面内容顶到屏幕外，
+       限高并交给卡片内部滚动，用户仍可上下滑看完整数据。 */
     .main > .card:last-child { max-height:360px; }
     .main > .card:last-child .scroll { overflow-y:auto; }
   }
@@ -958,14 +995,8 @@ const HTML = `<!DOCTYPE html>
   </div>
 
   <div class="card">
-    <h2>主播档案（累计）</h2>
-    <div class="scroll">
-      <div id="anchors"></div>
-      <div id="follow-card" style="display:none;margin-top:6px">
-        <div class="dim" style="font-size:10px">待手动关注</div>
-        <ul id="follow"></ul>
-      </div>
-    </div>
+    <h2>历史总数据</h2>
+    <div class="scroll" id="history"><div class="dim">加载中…</div></div>
   </div>
 </div>
 
@@ -1234,38 +1265,44 @@ async function tick(){
       }
     }
 
-    // 主播档案
+    // 📊 历史总数据（2026-11-06 用户要求，替代原「主播档案（累计）」逐房间列表）
+    //    口径与底部「历史 X/Y」一致：都用后端 dedupRows 后的全局累计，不虚高、不打架。
     {
-      const el = document.getElementById('anchors');
-      if (!d.anchors || !d.anchors.length) {
-        el.innerHTML = '<div class="dim">暂无档案</div>';
-      } else {
-        el.innerHTML = d.anchors.map(a=>{
-          const rate = a.total ? Math.round(a.joinable/a.total*100) : 0;
-          const rateCls = rate >= 50 ? 'ok' : (rate > 0 ? 'warn' : 'bad');
-          const name=(a.host || a.room).slice(0,16);
-          // 发福袋率：访问几次能遇到几次福袋，这是「主播是否真会发福袋」的核心指标
-          const fr = (a.rate !== null && a.visits > 0) ? (a.rate + '%') : '';
-          const frCls = a.rate === null ? 'dim' : (a.rate >= 50 ? 'ok' : (a.rate > 0 ? 'warn' : 'bad'));
-          const frTip = a.visits > 0 ? ('访问 ' + a.visits + ' 次，见到 ' + a.total + ' 次福袋') : '';
-          // 分两种展示：
-          //   有福袋历史 → 「累计 X/Y 发袋率 Z%」
-          //   只被访问过、从没福袋 → 「访问 N 次 · 无福袋」（这是学习中的负样本，很重要）
-          let stat;
-          if (a.total > 0) {
-            stat = '累计 <span class="'+rateCls+'">'+a.joinable+'</span>/'+a.total+
-                   (fr ? ' <span class="'+frCls+'" title="'+frTip+'">发袋率'+fr+'</span>' : '');
-          } else if (a.visits > 0) {
-            const vCls = a.visits >= 4 ? 'bad' : 'dim';
-            stat = '<span class="'+vCls+'">访问 '+a.visits+' 次 · 无福袋</span>';
-          } else {
-            stat = '<span class="dim">无数据</span>';
-          }
-          return '<div class="anchor-item">'+
-            '<div class="anchor-name" title="'+(a.host||'')+'">'+name+'</div>'+
-            '<div class="anchor-stat">'+stat+'</div>'+
-            '</div>';
-        }).join('');
+      const el = document.getElementById('history');
+      if (el) {
+        if (!d.history) { el.innerHTML = '<div class="dim">暂无数据</div>'; }
+        else {
+          const H = d.history;
+          const sec = (t) => '<div class="dim" style="font-size:10px;margin:7px 0 2px;border-bottom:1px solid rgba(255,255,255,.06);padding-bottom:2px">' + t + '</div>';
+          const kv = (k, v, cls) => '<div class="kv"><span>' + k + '</span><span' + (cls ? ' class="' + cls + '"' : '') + '>' + v + '</span></div>';
+          const day = (iso) => { try { const x = new Date(iso); return (x.getMonth()+1) + '/' + x.getDate(); } catch { return '-'; } };
+
+          let html = '';
+          html += sec('战绩总览');
+          html += kv('累计遭遇', H.total);
+          html += kv('累计参与成功', '<b>' + H.joined + '</b>', 'ok');
+          html += kv('累计参与率', H.rate + '%', Number(H.rate) >= 60 ? 'ok' : (Number(H.rate) >= 30 ? 'warn' : 'bad'));
+          html += kv('统计跨度', H.days + ' 天 · ' + day(H.firstAt) + '—' + day(H.lastAt));
+          html += kv('累计巡房轮次', H.rounds);
+
+          html += sec('开奖结果');
+          html += kv('中奖', H.wins, H.wins > 0 ? 'ok' : 'dim');
+          html += kv('未中奖', H.losses);
+          html += kv('开奖合计', H.draws);
+
+          html += sec('执行能力 · 累计');
+          html += kv('关注主播', H.followOk + '/' + H.followTotal + ' 真实到位');
+          html += kv('加入粉丝团', H.fansOk + '/' + H.fansTotal + ' 验证通过');
+          html += kv('主播档案', H.anchorTotal + ' 个 · 会发袋 ' + H.anchorKnown + ' 个');
+
+          html += sec('分账号累计 · 含已删除账号历史');
+          html += H.byAcc.map((a) => kv(a.label, a.total + '遭 / <b class="ok">' + a.joined + '参</b> · ' + a.rate + '%')).join('');
+
+          html += sec('结果分布 · 累计');
+          html += H.byResult.map((r) => kv(LABEL[r.key] || r.key, r.n)).join('');
+
+          el.innerHTML = html;
+        }
       }
     }
 
@@ -1334,10 +1371,6 @@ async function tick(){
       el.onclick = () => { window.__logExpanded = !window.__logExpanded; el.textContent = (window.__logExpanded ? d.logTailFull : d.logTail) || '(无日志)'; };
     }
 
-    if (d.follow.length){
-      document.getElementById('follow-card').style.display='';
-      document.getElementById('follow').innerHTML = d.follow.map(x=>'<li>'+x.replace(/^- \\[ \\] /,'')+'</li>').join('');
-    }
   }catch(e){
     document.getElementById('ts').textContent = '连接失败: ' + e.message;
   }
