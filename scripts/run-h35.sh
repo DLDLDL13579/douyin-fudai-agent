@@ -7,6 +7,8 @@ BASE="$1"
 ACCOUNT="$2"
 CACHE_MAX_MB=500      # 双源采集后缓存增长更快（3.5h 涨 700MB），阈值降到 500
 PNG_KEEP_DAYS=1       # 诊断截图保留天数（3天→1天：每天 100+ 张，实测 3 天积到 580MB）
+# 运行时缓存清理由独立守护 scripts/run-cache-cleaner.sh 负责（单实例锁，30 分钟周期）。
+# 本 supervisor 只在启动时尝试拉起它，锁保证全机只有一个守护，不重复。
 
 # ⚠ profile 路径与 hunter35.mjs 必须一致：
 #   非账号模式 → <工作目录>/chrome-profile
@@ -37,6 +39,19 @@ fi
 chrome_running() {
   ps -eo args | grep -F "remote-debugging-port=$PORT" | grep -v grep >/dev/null 2>&1
 }
+
+# ── 运行时缓存守护（2026-11-06）
+# ⚠ 原清理逻辑有两个致命前提：写在 while 顶部 + 要求 ! chrome_running。
+#   但 node hunter35.mjs 是阻塞式前台运行，7×24 下 hunter / Chrome 都不退出，
+#   清理代码永远不执行 → Default/Cache 无限增长。实测 1 小时涨 415MB，
+#   两个 profile 的 Cache 合计 1.16GB，磁盘 6.2Gi → 4.5Gi 触发告警。
+# 改为独立守护进程：用 CDP Network.clearBrowserCache 在 Chrome 运行时清缓存，
+#   不动文件句柄、不重启、不碰登录态，实测幂等且自检仍 OK。
+# run-cache-cleaner.sh 自带单实例锁，任意 supervisor 拉起都安全，不会双守护。
+# 用 nohup 让它脱离 supervisor：supervisor 重启 / 被杀时清理守护不受影响。
+if [ -f "$ROOT_DIR/scripts/run-cache-cleaner.sh" ]; then
+  nohup bash "$ROOT_DIR/scripts/run-cache-cleaner.sh" >> "$BASE/h35.log" 2>&1 < /dev/null &
+fi
 
 while true; do
   # ── 1. 清理过期诊断截图，防止 7×24 跑下来撑爆磁盘
