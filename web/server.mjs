@@ -770,6 +770,8 @@ const HTML = `<!DOCTYPE html>
     .card { padding:13px; }
     .big { font-size:22px; }
     pre { max-height:200px; font-size:11px; }
+    /* 手机窄屏下「学习/执行结果」双列会挤成一团文字，改单列 */
+    .split2 { grid-template-columns:minmax(0,1fr); }
   }
   @media (display-mode: standalone) {
     body { padding-top:calc(12px + env(safe-area-inset-top)); }
@@ -801,10 +803,10 @@ const HTML = `<!DOCTYPE html>
   /* ⚠ 每个 fr 都必须包 minmax(0,...)：grid 轨道默认 min-width:auto，
      内容（长房间名 + white-space:nowrap）会把轨道撑到 500px，
      把第三列压成 100px，文字全被挤断行。实测踩过两次。 */
-  .main { flex:1; min-height:0; display:grid; gap:8px;
+  .main { flex:1; min-height:0; min-width:0; display:grid; gap:8px;
           grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(0,1fr);
           grid-template-rows:1fr 1fr; }
-  .main .card { min-height:0; display:flex; flex-direction:column; padding:9px 11px; border-radius:8px; }
+  .main .card { min-height:0; min-width:0; display:flex; flex-direction:column; padding:9px 11px; border-radius:8px; }
   .main .card h2 { font-size:11px; margin:0 0 6px; flex:none; }
   .scroll { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; }
   .scroll::-webkit-scrollbar { width:5px; }
@@ -860,16 +862,27 @@ const HTML = `<!DOCTYPE html>
     .main > .card:nth-child(6){ grid-area:anchors; }
   }
   @media (max-width:900px){
-    .main { grid-template-columns:1fr; grid-template-rows:none;
+    /* ⚠ 单列轨道必须 minmax(0,1fr)：裸 1fr 的 min-width:auto 会被
+       white-space:nowrap 的长文本撑到 887px，手机上产生横向溢出。 */
+    .main { grid-template-columns:minmax(0,1fr); grid-template-rows:none;
             grid-template-areas:none; }
-    .main > .card { grid-area:auto; max-height:300px; }
+    /* ⚠ 必须把 1100px 断点里给每张卡片指定的 grid-area 复位，
+       否则命名区域被 grid-template-areas:none 取消后，6 张卡片仍各自
+       grid-area:events/pinned/...，全部被丢进同一个隐式格子重叠在一起，
+       手机上就只剩最后绘制的「主播档案」一张（2026-11-06 实测踩过）。 */
+    .main > .card { grid-area:auto !important; max-height:300px; }
   }
   @media (max-width:700px){
-    body { overflow:auto; height:auto; }
-    .main { grid-template-columns:1fr; grid-template-rows:none; }
+    body { overflow:auto; height:auto; overflow-x:hidden; }
+    .main { grid-template-columns:minmax(0,1fr); grid-template-rows:none; }
     .main .card { max-height:none; }
-    .scroll { overflow:visible; }
+    .main > .card { grid-area:auto !important; }
+    .scroll { overflow:visible; overflow-x:hidden; }
     .kpi { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    /* 手机上主播档案动辄几十行，整张卡片 1200px+ 会把后面所有内容顶到屏幕外，
+       限高并交给卡片内部滚动，用户仍可上下滑看完整档案。 */
+    .main > .card:last-child { max-height:360px; }
+    .main > .card:last-child .scroll { overflow-y:auto; }
   }
 </style>
 </head>
