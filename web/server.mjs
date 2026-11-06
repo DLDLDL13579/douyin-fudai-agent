@@ -275,11 +275,16 @@ function execStats() {
   };
 
   // 粉丝团 / 关注：只认带 at 的真实记账
+  //    ⚠ 2026-11-06 修：历史 joinBtn 记录写的是 ok=false，但参与按钮就位即代表
+  //      真加入成功（49 次对应 participations 全部 result=joined，且已补记 1 钻消费）。
+  //      写账时把 ok 判错的是旧验证表达式（51 次 __err），不是执行本身失败。
+  //      这里按 state 折算，**不改写 exec-actions.jsonl 任何一行**，原始观测完整保留。
+  const fansRealOk = (r) => !!r.ok || r.state === 'joinBtn';
   for (const r of rows('exec-actions.jsonl')) {
     if (!isLocalDay(r.at, today)) continue;
     if (r.action === 'fans') {
       out.fansTry++;
-      if (r.ok) out.fansOk++; else out.fansFail++;
+      if (fansRealOk(r)) out.fansOk++; else out.fansFail++;
     } else if (r.action === 'follow') {
       out.followTry++;
       if (r.ok) out.followOk++;
@@ -292,9 +297,12 @@ function execStats() {
   out.wins   = rows('wins.jsonl').filter((r) => isLocalDay(r.at, today)).length;
   out.losses = rows('losses.jsonl').filter((r) => isLocalDay(r.at, today)).length;
 
-  // 抖币消耗：只统计今日真正加入成功（ok=true 才写），与粉丝团成功率同源
+  // 抖币消耗：按记录里的 coins 求和（不是数行数），与真实加入成功同源。
+  //    ⚠ 2026-11-06 修：旧写法数「行数」，若一条记录 coins=2 会少算；
+  //    且 coin-spend.jsonl 曾因记账判据 bug 从未生成，文件不存在就是 0，不补造。
   out.coins = rows('coin-spend.jsonl')
-    .filter((r) => isLocalDay(r.at, today) && (r.coins || 0) > 0).length;
+    .filter((r) => isLocalDay(r.at, today))
+    .reduce((n, r) => n + (Number(r.coins) || 0), 0);
   return out;
 }
 

@@ -2098,3 +2098,83 @@ supervisor 重启 / 被杀时清理不受影响。日志 `douyin-auto/cache-clea
 即将消失的 DOM id」。本次 follow 列表就是隐性耦合，漏删渲染会让整个看板 tick 崩掉，
 比样式错乱严重得多。另外「历史累计」类指标最容易和页面已有的同类数字口径打架，
 复用同一份去重后的数据源比重新统计更安全。
+
+## 2026-11-06 17:55：抖币消耗记录 0 钻 —— 记账判据与 ev 返回类型双 bug
+
+用户报告看板「抖币消耗 0 钻」。先按「看不见和没有表现一样」排查，结论是
+**真扣了钻、但一条都没记账**：`data/coin-spend.jsonl` 甚至从未生成。
+
+### 三个独立 bug 叠加
+
+**Bug 1：`ev()` 返回 JSON 字符串，代码当对象用。**
+`ev()` 返回 `r.result.value`，而所有探针表达式都 `return JSON.stringify({...})`，
+所以拿到的是**字符串**。但 `settle.done` / `settle.confirm` / `needPay.__err` 全按对象读，
+恒为 undefined → 8 次 settle 轮询全空转、二次确认弹窗从未被识别。
+日志实证：`弹窗状态: "{\"hasConfirm\":true,\"hasDone\":false}"`（外层引号说明是字符串）。
+
+**Bug 2：验证表达式在弹层切换时抛 `Uncaught`。**
+`document.body.innerText` 在面板重渲染瞬间 body 被替换，evaluate 直接抛异常。
+历史统计：**51 次 `__err:Uncaught`、仅 1 次成功**，仅 1 次 `[object Object]`。
+导致 `ok`（读到「已加入」文案）恒为 false。
+
+**Bug 3：`if(ok)` 才写 coin-spend.jsonl。**
+而真加入的稳定信号根本不是「已加入」文案——抖音加入成功后常把面板重渲染成
+「一键发评论参与福袋」，文案里没有「已加入」，`hasJoinBtn` 才是可靠信号。
+
+### 决定性数据：49 次真实消费被整批漏记
+
+| 证据 | 数值 |
+|:---|:---|
+| `exec-actions.jsonl` 的 fans 记录 | 23 条，21 条 `joinBtn`、2 条 `no-coins`，`ok=true` **0 条** |
+| 日志加入粉丝团尝试 | 52 次，其中 50 次随后 `joined` |
+| 今日 `fans-join:joinBtn` 步骤记录 | 16 条，**全部 `result=joined`** |
+| `participations.jsonl` 全量 `fans-join:joinBtn` | **49 条，全部 `joined`**，无一缺 at/url |
+
+17:28 完整时间线可作铁证：`hasConfirm:true` → 验证 `__err` → 复扫发现参与按钮 →
+`fans-then-btn` → `结果: joined` → `✅✅ 参与成功`。加入真实发生、1 钻真实扣除，
+但 `ok=false` 让记账分支一次都没进。
+
+### 修复（4 处）
+
+1. **`hunter35.mjs`**：新增 `parseEv(v)` 统一兼容字符串 / 对象 / `__err`；
+   `panelProbe` 表达式自带 `try/catch`，`body` 不可用时兜底 `documentElement.innerText`，
+   再兜底返回 `{__err}`，杜绝 `Uncaught` 刷屏。settle / needPay / 验证三处共用它。
+2. **`hunter35.mjs` 记账判据**：`reallyJoined = (ok || hasJoinBtn) && !noCoins`。
+   `noCoins`（弹出「钻石余额不足/请充值」）绝不记账——加入客观未发生、没扣钻。
+   日志区分 `verified` / `joinBtn` 两种确认路径，失败写 `⚠️ 抖币消费记账失败` 不再静默。
+   `recExec('fans', reallyJoined, ...)` 同步修正，与消费同源。
+3. **`web/server.mjs` `execStats`**：`coins` 从「数行数」改为按 `coins` 字段求和；
+   `fansOk` 按 `state==='joinBtn'` 折算真实成功，**不改写 `exec-actions.jsonl` 任何一行**
+   （原始观测完整保留，只在读取时修正判据）。
+4. **新增 `scripts/backfill-coin-spend.mjs`**：补记 49 次历史消费。
+
+### 补记的 4 条硬约束
+
+- ⚠ **只取 `data/participations.jsonl`**。`douyin-auto/h35-results.jsonl` 是同一批数据的旧副本，
+  实测其 40 条命中与 participations 的 `at|url` **100% 重叠**；合并会重复计 40 钻。
+- 每条带 `backfill:true` + `source:'participations.jsonl#fans-join:joinBtn'`，
+  与运行时实时写入条目可区分，**不伪造成当时就记了**。
+- 按 `at|account|room` 去重，幂等；`--dry-run` 可预演。
+- 只读运行时数据、只追加 `coin-spend.jsonl`；不改写 participations、不改配置、不提交 runtime jsonl。
+
+补记结果：49 条 / 49 钻，分账号 default 40 / main2 3 / main3 6，
+按本地日 11-04 13 / 11-05 20 / 11-06 16。重跑 0 新增。
+
+### 验证
+
+- 3 个文件 `node --check` 通过；`parseEv` 五类输入、`reallyJoined` 四分支确定性求值 5/5 通过
+- `panelProbe` 在 vm 假页面上跑 3 种状态：正常页面识别二次确认、body 为 null 时从
+  `documentElement` 兜底读到「已加入」、document 抛异常被 catch 捕获返回 `__err` 而非崩溃
+- 独立端口求值 `exec.coins=16`；重启生产 8899 后 API 与无头 Chrome dump DOM 均显示
+  **「抖币消耗 16 钻」「粉丝团 16/18」**，6 张卡片与今日 KPI 未受影响
+- `history` 累计、`byAccount` 合计、8898 200 / 公网 GET 200 / POST 403 全部正常
+- 双实例自检 OK、hunter 2、9750/9752 各 1；期间 9752 一次 `EMPTY_PAGE len=20` 经 3 次复测
+  `OK len=588~606` 且日志 1 秒前在写，判为导航瞬态自愈
+- `dist/portable` 同步 3 个文件，21M 绿色包重打并校验包内含补记脚本
+
+**教训**：「指标显示 0」有四种可能 —— 真没发生 / 采集端瞎了 / 记账漏写 / 显示口径错。
+这次是记账判据引用了一个**几乎必然失败**的验证表达式，51 次抛异常却因 `catch(e){}`
+和「文案没匹配上」表现完全一样，静默了 3 天。凡是「A 发生了才记 B」的链路，
+必须独立核对 A 的判据本身成功率，不能只看 B 一直是 0 就当没发生。
+另外 `ev()` 的返回值类型必须与调用方的读法一致 —— `JSON.stringify` 包一层
+却当对象读，这种 bug 语法检查抓不到、也不抛错，只会让轮询永远空转。

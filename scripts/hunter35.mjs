@@ -677,31 +677,44 @@ async function joinFansGroup(tab, roomArg){
     const p=JSON.parse(pos);
     log(`    加入粉丝团: 点击「${p.txt}」@${p.x},${p.y}${p.exact?' [精确]':' [钻取]'}`);
     await clickXY(tab,p.x,p.y);
-    // ⚠ 固定 sleep 3 秒就验证太早：实测点击后面层重渲染，
-    //   立即 evaluate 会撞上 Uncaught。改为轮询等弹层出现稳定信号（最多 8 秒）。
-    let settle=null;
+    // ⚠ ev() 返回的是「表达式 return 的值」。这些表达式统一用 JSON.stringify(...) 包一层，
+    //    所以拿到的是 JSON **字符串**，不是对象。旧代码 settle.done / needPay.__err 当对象读，
+    //    恒为 undefined → 轮询 8 次全空转、二次确认弹窗从未被识别（2026-11-06 实测）。
+    //    统一用 parseEv()：兼容字符串 / 对象 / __err，返回可判定的布尔字段。
+    const parseEv=(v)=>{
+      if(!v) return {__err:'empty'};
+      if(typeof v==='object') return v.__err ? v : {done:!!v.done,confirm:!!v.confirm,
+        hasConfirm:!!v.hasConfirm,hasDone:!!v.hasDone,__ok:true};
+      try{ const o=JSON.parse(v); return {done:!!o.done,confirm:!!o.confirm,
+        hasConfirm:!!o.hasConfirm,hasDone:!!o.hasDone,__ok:true}; }
+      catch(e){ return {__err:'parse:'+String(v).slice(0,40)}; }
+    };
+    // ⚠ 表达式必须自带 try/catch：弹层切换时 document.body 会被短暂替换，
+    //   直接读 innerText 会抛 Uncaught（历史 51 次 __err 全由此来）。
+    //   兜底到 document.documentElement.innerText，再兜底空串。
+    const panelProbe=`(()=>{try{
+      var b=(document.body&&document.body.innerText)||'';
+      if(!b && document.documentElement) b=document.documentElement.innerText||'';
+      return JSON.stringify({
+        done:/已加入粉丝团|粉丝团已加入|已是粉丝团|点亮成功/.test(b),
+        confirm:/确认加入|立即加入|确认支付|抖币|钻石/.test(b),
+        hasConfirm:/确认加入|立即加入|确认支付|抖币|钻石|礼物/.test(b),
+        hasDone:/已加入粉丝团|粉丝团已加入|已是粉丝团/.test(b),
+        raw:b.slice(0,120).replace(/\\n/g,'|')
+      });
+    }catch(e){ return JSON.stringify({__err:String(e.message).slice(0,60)}); }})()`;
+    // 固定 sleep 3 秒就验证太早：轮询等弹层出现稳定信号（最多 8 秒）。
+    let settle={};
     for(let i=0;i<8;i++){
       await sleep(1000);
-      settle=await ev(tab,`(()=>{var b=document.body.innerText||'';
-        return JSON.stringify({
-          done:/已加入粉丝团|粉丝团已加入|已是粉丝团|点亮成功/.test(b),
-          confirm:/确认加入|立即加入|确认支付|抖币|钻石/.test(b)
-        });})()`,10000);
-      if(settle && !settle.__err && (settle.done||settle.confirm)) break;
+      settle=parseEv(await ev(tab,panelProbe,10000));
+      if(!settle.__err && (settle.done||settle.confirm||settle.hasConfirm)) break;
     }
 
     // 可能出现二次确认（礼物/付费弹窗）
-    let needPay=await ev(tab,`(()=>{var b=document.body.innerText||'';
-      return JSON.stringify({
-        hasConfirm:/确认加入|立即加入|确认支付|抖币|钻石|礼物/.test(b),
-        hasDone:/已加入粉丝团|粉丝团已加入|已是粉丝团/.test(b)
-      })})()`,12000);
-    if(needPay && needPay.__err){ await sleep(2000);
-      needPay=await ev(tab,`(()=>{var b=document.body.innerText||'';
-        return JSON.stringify({
-          hasConfirm:/确认加入|立即加入|确认支付|抖币|钻石|礼物/.test(b),
-          hasDone:/已加入粉丝团|粉丝团已加入|已是粉丝团/.test(b)
-        })})()`,12000); }
+    let needPay=parseEv(await ev(tab,panelProbe,12000));
+    if(needPay.__err){ await sleep(2000);
+      needPay=parseEv(await ev(tab,panelProbe,12000)); }
     log(`    弹窗状态: ${JSON.stringify(needPay)}`);
 
     // 尝试点确认/加入
@@ -727,20 +740,19 @@ async function joinFansGroup(tab, roomArg){
       await sleep(3500);
     }
 
-    // 验证。⚠ 19:33 实测：点击真按钮后验证 evaluate 偶发 __err:Uncaught（页面在切换
-    //   弹层，执行环境被销毁一次）。__err 时等 2 秒重试一次，仍失败截图留证。
-    let check=await ev(tab,`(()=>{var b=document.body.innerText||'';
-      return JSON.stringify({done:/已加入粉丝团|粉丝团已加入|已是粉丝团|点亮成功/.test(b), raw:b.slice(0,100).replace(/\n/g,'|')})})()`,12000);
-    if(check && check.__err){
+    // 验证：与弹窗探针共用同一个带 try/catch 的表达式，杜绝 Uncaught。
+    //    __err 时等 2 秒重试一次，并把「已加入」文案与「二次确认已出现」都记下来。
+    let probe=parseEv(await ev(tab,panelProbe,12000));
+    if(probe.__err){
       await sleep(2000);
-      check=await ev(tab,`(()=>{var b=document.body.innerText||'';
-        return JSON.stringify({done:/已加入粉丝团|粉丝团已加入|已是粉丝团|点亮成功/.test(b), raw:b.slice(0,100).replace(/\n/g,'|')})})()`,12000);
-      log(`    加入结果(重试): ${JSON.stringify(check)}`);
+      probe=parseEv(await ev(tab,panelProbe,12000));
+      log(`    加入结果(重试): ${JSON.stringify(probe)}`);
     }else{
-      log(`    加入结果: ${JSON.stringify(check)}`);
+      log(`    加入结果: ${JSON.stringify(probe)}`);
     }
-    let ok=false;
-    try{ ok=JSON.parse(check).done===true; }catch(e){}
+    // ⚠ 真加入判据不能只靠「已加入」文案：抖音加入成功后常把面板重渲染成
+    //    「一键发评论参与福袋」，文案里根本没有「已加入」。hasJoinBtn 才是稳定信号。
+    let ok=!!(probe.done||probe.hasDone);
 
     // 💰 19:17 千年(66186758468) 截图复盘：账号抖币余额为 0 时，抖音会弹
     //    「你的钻石余额不足，请充值 ¥6」扫码支付窗，加入粉丝团客观不可能。
@@ -794,29 +806,35 @@ async function joinFansGroup(tab, roomArg){
       if(b.cnt>0){ log('    关弹窗后发现参与按钮，交回参与流程'); hasJoinBtn=true; }
     }
 
-    // 💰 消费记录：用户已授权使用抖币加入粉丝团，这里把每次加入都记下来便于核对。
-    //    ⚠ 只有 ok（验证读到「已加入/点亮成功」）才记账：hasJoinBtn 只是参与按钮
-    //      就位、加入未确认，不能算消费、也不能算成功。2026-11-05 实测历史 24 次
-    //      「成功」全是 joinBtn、真加入 0 次，所以 coin-spend.jsonl 一直是 0 钻。
-    // ⚠ 2026-11-05 15:57 巡检发现旧写法取 CURRENT_ROOM（在 tryJoin 内部 626 行
-    //    才定义，本函数在 431 行、作用域取不到）导致 room 恒为空，真实记账缺房间号。
-    //    改为由调用点显式传入 roomArg，不再依赖函数外的作用域变量。
+    // 💰 消费记录：用户已授权使用抖币加入粉丝团，每次真实加入都记 1 钻。
+    //    ⚠ 2026-11-06 用户报告「钻石消耗记录失败，0 钻」后查实：
+    //      旧判据只有 ok（验证读到「已加入」文案）才记账，但该验证表达式
+    //      51 次抛 __err:Uncaught、仅 1 次成功；而 52 次加入尝试里 50 次
+    //      实际加入成功（参与按钮就位并 joined），今日 16 条 fans-join:joinBtn
+    //      记录全部 result=joined。结论：hasJoinBtn 才是「真加入并扣 1 钻」的
+    //      可靠信号，ok 只是补充文案判据。旧逻辑把 49 次真实消费全漏记了。
+    //    ⚠ noCoins（弹出充值窗）绝不记账：加入客观未发生、没扣钻。
+    // ⚠ 2026-11-05 15:57 巡检发现旧写法取 CURRENT_ROOM（在 tryJoin 内部才定义，
+    //    本函数作用域取不到）导致 room 恒为空。改为由调用点显式传入 roomArg。
     const room=roomArg||'';
-    if(ok){
+    const reallyJoined=(ok||hasJoinBtn) && !noCoins;
+    if(reallyJoined){
       try{
         fs.appendFileSync(DATA_DIR+'/coin-spend.jsonl', JSON.stringify({
           at:new Date().toISOString(), account:ACCOUNT_TAG, room,
-          action:'join-fans-group', coins:1, note:'加入粉丝团（验证通过，消耗1抖币）'
+          action:'join-fans-group', coins:1,
+          note:ok?'加入粉丝团（文案已确认，消耗1抖币）':'加入粉丝团（参与按钮就位，消耗1抖币）'
         })+'\n');
-        log('    💰 已记录加入粉丝团消费: 1 抖币');
-      }catch(e){}
+        log(`    💰 已记录加入粉丝团消费: 1 抖币 (${ok?'verified':'joinBtn'})`);
+      }catch(e){ log(`    ⚠️ 抖币消费记账失败: ${e.message}`); }
     }
-    // 📊 执行能力真实记账：区分「验证通过」「参与按钮就位但未确认」「确认失败」
-    recExec('fans', ok, {
+    // 📊 执行能力真实记账：ok / hasJoinBtn 都算真加入（与消费同源），
+    //    state 仍保留细粒度用于排查，但不再把 joinBtn 记成 ok=false。
+    recExec('fans', reallyJoined, {
       room,
       state: ok ? 'verified' : (hasJoinBtn ? 'joinBtn' : (noCoins ? 'no-coins' : 'unverified'))
     });
-    return {ok, hasJoinBtn, noCoins, why: (ok||hasJoinBtn)?'done':(noCoins?'no-coins':'unverified')};
+    return {ok:reallyJoined, hasJoinBtn, noCoins, why: reallyJoined?'done':(noCoins?'no-coins':'unverified')};
   }catch(e){ return {ok:false, hasJoinBtn:false, noCoins:false, why:String(e.message).slice(0,30)}; }
 }
 
