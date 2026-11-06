@@ -52,7 +52,27 @@ const pad = (s, n) => String(s).padEnd(n);
 const padL = (s, n) => String(s).padStart(n);
 
 const all = readJsonl(LOG);
-const rows = showAll ? all : all.filter(r => isLocalDay(r.at, day));
+const rawRows = showAll ? all : all.filter(r => isLocalDay(r.at, day));
+
+// ── 折叠历史 gate-skip 重复（2026-11-06 09:28）──────────────────
+// 旧版埋点用「房间+倒计时」去重，而倒计时每 2 秒递减，同一个福袋在一次常驻内
+// 被连续记 56 次。主程序已改为「secLeft 回升才算新福袋」，这里对**历史数据**
+// 做等价折叠，保留原始文件不动，让今天的报告数字立即变准。
+// 判据：同一 decisionId 内，secLeft 单调递减的连续记录视为同一个福袋。
+let gateFolded = 0;
+const gateSeen = new Map();   // decisionId -> 上一次采样看到的 secLeft（不是上一条保留值）
+const rows = [];
+for (const r of rawRows) {
+  if (r.ev !== 'gate-skip' || r.decisionId === undefined) { rows.push(r); continue; }
+  const sec = typeof r.secLeft === 'number' ? r.secLeft : -1;
+  const prev = gateSeen.get(r.decisionId);
+  const isNew = sec < 0 ? prev === undefined : (prev === undefined || sec > prev);
+  if (isNew) rows.push(r);
+  else gateFolded++;
+  // 与主程序一致：无论是否保留，都把参照值推进到本次采样
+  if (sec >= 0) gateSeen.set(r.decisionId, sec);
+  else if (prev === undefined) gateSeen.set(r.decisionId, -1);
+}
 
 console.log('');
 console.log('════════════════════════════════════════════════════════════');
@@ -73,6 +93,7 @@ const evCount = {};
 rows.forEach(r => evCount[r.ev] = (evCount[r.ev] || 0) + 1);
 console.log('【数据概览】');
 console.log('  事件总数 ' + rows.length + '  ' + Object.entries(evCount).map(([k, v]) => k + ':' + v).join('  '));
+if (gateFolded) console.log('  ⚠ 已折叠历史 gate-skip 重复 ' + gateFolded + ' 条（同一福袋被旧去重逻辑反复记录；原始文件未改动）');
 const policies = [...new Set(rows.map(r => r.policyId).filter(Boolean))];
 console.log('  参数版本 ' + policies.length + ' 个：' + policies.join(', '));
 console.log('  账号 ' + [...new Set(rows.map(r => r.account))].join(', '));

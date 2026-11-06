@@ -139,7 +139,11 @@ const POLICY_ID=(()=>{
 })();
 let _decisionSeq=0;
 const newDecisionId=()=>`${Date.now().toString(36)}-${(++_decisionSeq).toString(36)}-${ACCOUNT_TAG}`;
-// gate-skip 去重：roomStayId -> 上次记录的「房间+倒计时」。限容 300，避免 7×24 无限增长。
+// gate-skip 去重：roomStayId -> 本次常驻内上次记录的 secLeft。
+// ⚠ 2026-11-06 09:28 修复：旧版用「房间+倒计时 cd」做 key，而 cd 每 2 秒变一次，
+//    同一个福袋被连续记 56 次（647 条里绝大多数是重复），把报告 C 段撑到失真。
+//    改为「secLeft 单调递减 = 同一福袋不重记；回升 = 新福袋才记」，与项目既有
+//    「倒计时回升判据」同源。room-exit 时清理该 stayId，避免 7×24 内存泄漏。
 const _gateLogged=new Map();
 // 唯一写入口。ev 为事件类型，p 为业务字段；公共字段自动补齐。
 const recStrategy=(ev,p)=>{
@@ -1881,17 +1885,29 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
             // 又变成 11-03 那种「看不见和没有表现一样」的排查黑洞。每 10 次采样打印一次。
             if(dbgCnt%10===1) log(`  ⛔ 门槛硬卡跳过福袋: 在线${d.online} < ${getMinOnline()} ${g.isVip?'[VIP]':''} ${disp(g.room)}`);
             // 🧠 策略观测：被门槛拦下的福袋是评估「门槛是否过高」的直接反事实证据。
-            //    按房间+倒计时去重，避免每 5 秒扫描写一条把日志撑爆。
-            const gateKey=`${g.room}:${(d.fudai||{}).cd||''}`;
-            if(_gateLogged.get(roomStayId)!==gateKey){
-              _gateLogged.set(roomStayId,gateKey);
+            //    ⚠ 去重判据用 secLeft 而不是 cd：福袋倒计时每 2 秒递减，
+            //    「房间+cd」会让同一个福袋每轮扫描都记一条（实测 56 条/福袋）。
+            //    只有 secLeft 相对上次记录回升才说明是**新福袋**，否则一律不重记。
+            const _sec=(d.fudai||{}).sec;
+            const _prev=_gateLogged.get(roomStayId);
+            // ⚠ _prev 存的是「上一次采样看到的 secLeft」，不是「首次记录值」：
+            //    新福袋倒计时从 09:55 重新开始，若拿它跟上一轮首次的 09:56 比，
+            //    因为 595<596 会永远判不出回升（09:56 修复时实测踩过）。
+            //    同一福袋 secLeft 单调递减 → 永不 > _prev；新福袋回升 → 必 > _prev。
+            const _isNew=(typeof _sec!=='number'||_sec<0)
+              ? _prev===undefined                     // 解析不到倒计时时，每次常驻最多记 1 条
+              : (_prev===undefined || _sec>_prev);
+            if(_isNew){
               recStrategy('gate-skip',{
                 decisionId:roomStayId, room:g.room, online:d.online,
                 minOnline:getMinOnline(), isVip:!!g.isVip,
-                cd:(d.fudai||{}).cd||'', secLeft:(d.fudai||{}).sec??-1,
+                cd:(d.fudai||{}).cd||'', secLeft:_sec??-1,
                 reason:'online-below-threshold'
               });
             }
+            // 无论是否写事件，都要更新参照值到本次采样（关键：不能只在写事件时更新）
+            if(typeof _sec==='number'&&_sec>=0) _gateLogged.set(roomStayId,_sec);
+            else if(_prev===undefined) _gateLogged.set(roomStayId,-1);
           }
           if(d.fudai && onlineOK){
             // 🔑 只在倒计时充足时尝试（实测剩余不足180秒的福袋点不开面板）
@@ -2237,6 +2253,7 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
           hadFudai:!!handled, postDrawRound,
           plannedStaySec:Math.round(perMs/1000)
         });
+        _gateLogged.delete(roomStayId);   // 清掉本次常驻的去重状态，避免 7×24 Map 泄漏
       }
     }
   }catch(e){log('FATAL',e.message);}
