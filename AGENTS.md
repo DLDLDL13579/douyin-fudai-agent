@@ -1865,3 +1865,60 @@ ShortTouchContainer > jIgR_FEZ
 当成终局而不是「换下一个候选继续找」，才是漏掉福袋的根因。
 另外：**失败/跳过的中间态绝不能写终态记录或长窗口**，`packet-only` 与
 `packet-skipped` 的分离和之前 `joined` 才写成功去重是同一条原则。
+
+## 2026-11-06 11:20：Web 看板映射公网，只读、禁用启停
+
+用户要求「把 web 面板也映射到公网给我看」。选择「只读公网，禁用启停」；通道上原本想复用
+「手机远程 dsh 的域名」，查清后改为独立隧道。
+
+### 为什么没复用 `dsh.dlcqp.asia`
+
+那条是 DSH 自己的**命名隧道**：`cloudflared tunnel run` 由 `TUNNEL_TOKEN` 远程托管，
+ingress、zone、CNAME 全在 Cloudflare 侧配置，本机没有 API token（只找到
+`cordis.patch.yml` 里的 `publicBaseUrl`、`tunnelToken`，且 relay 关闭有历史故障记录）。
+改它既做不到，也会**同时断掉手机远程与当前这个 GUI**（`3080` 是同一个入口）。
+所以硬约束：**绝不碰 DSH 的 3080 隧道与 `cordis.patch.yml`**。
+
+### 方案：独立只读代理 + 独立 quick tunnel
+
+```
+公网 https://<随机>.trycloudflare.com
+   → cloudflared quick tunnel（独立进程，只连 8898）
+   → 127.0.0.1:8898  web/public-readonly.mjs   ← 只读层
+   → 127.0.0.1:8899  原看板 web/server.mjs      ← 源码与进程完全不动
+```
+
+- `web/public-readonly.mjs`：只放行 GET 白名单 `/`、`/api/status`、`/icon.svg`、`/manifest.json`；
+  **任何 POST / PUT / 非白名单路径一律 403**。HTML 注入一段脚本隐藏启停、
+  切换账号、添加账号按钮，并拦截非 GET 的 `fetch`。
+  前端源码里 `data-act` 按钮仍在，由 CSS 隐藏，属预期。
+- `web/run-public.sh`：单实例锁 `/tmp/fudai-public.lock`，每 10 秒巡检，
+  代理或隧道任一退出就自动拉起；域名写入 `/tmp/fudai-public-url.txt`。
+  `cloudflared` 路径用 `DY_CLOUDFLARED` → `$DSH_HOME/profiles/...` → `PATH` 三级探测，
+  **不写死任何用户名**（首次写死 `/Users/...` 被 `precommit-check.mjs` 判为身份明文拦下）。
+- 守护按命令行精确匹配 `tunnel --url http://127.0.0.1:8898`，
+  **绝不误判/误杀 DSH 的 `3080` 隧道**。
+
+### 验证
+
+- `node --check` / `bash -n` 通过；门禁零命中
+- 本地：GET 4 条白名单全 200；`POST /api/action` 的 5 种动作 `start/stop/restart/account-use/account-add`
+  全 403；`PUT /api/status`、`GET /api/foo`、`GET /data/cookies.json` 全 403
+- 公网：`GET /` 200、`GET /api/status` 200 且 `todayTotal=30=byAccount 合计`、
+  `POST /api/action` 403；HTML 注入 1 处
+- 原 `8899` 看板、`3080` GUI、DSH 命名隧道全程未中断
+- 守护：单实例锁复测正确退出、一个周期后日志无重复拉起、
+  `8898` 隧道 1 条 / `3080` 隧道 1 条
+
+### 运维提醒
+
+- 网址是 **quick tunnel 随机域名，每次隧道重启都会变**。取当前地址：
+  `cat /tmp/fudai-public-url.txt`；守护会自动更新该文件。
+- 手机上**看不到也点不了**启停/切号/加号按钮，这是用户选定的只读口径，不是故障。
+- 本地 `http://127.0.0.1:8899` 仍是完整功能看板，启停只在本地用。
+- 巡检时看到 `public-readonly.mjs`、`run-public.sh`、
+  `tunnel --url http://127.0.0.1:8898` 三个进程属**预期**，不要当野进程清理。
+- 想彻底关闭公网入口：`kill $(cat /tmp/fudai-public.lock)`，
+  再按 `tunnel --url http://127.0.0.1:8898` 精确杀 cloudflared 与 `8898` 代理；
+  **不要 `pkill -f cloudflared`**，会连带杀掉 DSH 自己两条隧道。
+- 提交 `2857091`，绿色包已同步两个新文件。
