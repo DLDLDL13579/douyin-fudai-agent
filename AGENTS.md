@@ -1970,3 +1970,78 @@ ingress、zone、CNAME 全在 Cloudflare 侧配置，本机没有 API token（�
 **教训**：用 `grid-template-areas` 做响应式时，`areas:none` 与「复位每个子项的 `grid-area`」
 必须成对出现，否则命名区域消失后子项会全部塌进同一个隐式格子。
 这个故障在桌面完全看不出来，只有窄屏断点才暴露。
+
+## 2026-11-06 14:15：磁盘跌破 5Gi —— 7×24 下 Chrome 缓存清理永不触发
+
+13:47 巡检发现磁盘可用 4.56Gi，跌破 5Gi 告警线，且 6.2 → 5.9 → 4.6 持续下降。
+
+### 增长源实测
+
+| 项 | 数值 |
+|:---|:---|
+| 近 60 分钟新增文件 | 415.6 MB / 6057 个 |
+| 主实例 `Default/Cache` | 534 MB |
+| main3 `Default/Cache` | 629 MB |
+| 两实例 Code Cache | 约 246 MB |
+| 近 60 分钟新增文件按目录 | `Cache_Data` 3350 + 2446 个，压倒性大头 |
+
+### 根因：`run-h35.sh` 的清理代码永远不执行
+
+原清理段有两个致命前提叠加：
+
+1. 写在 `while true` 顶部，而 `node hunter35.mjs` 是**阻塞式前台运行**；
+2. 缓存回收还要求 `if ! chrome_running`。
+
+7×24 长跑下 hunter 不退出、Chrome 不退出 ⇒ 既回不到 while 顶部、又永远不满足
+`! chrome_running`。实测 500MB 阈值双双突破却一次都没触发。这是「写了清理逻辑但从未生效」
+的典型：语法正确、日志无报错、只有磁盘在悄悄下降。
+
+### 止血：CDP `Network.clearBrowserCache`
+
+不重启、不杀 Chrome、不动运行中 profile 的文件句柄、不碰 Cookie / 登录态。
+实测两个 Cache 目录 534/629MB → 2/2MB，磁盘 **4.5Gi → 5.9Gi**；
+清完双实例自检 OK、`sessionid`/`sid_tt` 齐全、日志持续在写。
+
+顺带回收零风险无主产物：
+- `accounts/main/profile` 是 380MB 无主残留（0 进程引用，9750 实际用 `douyin-auto/chrome-profile`、
+  9752 用 `accounts/main3/profile`），只删其 `Default/Cache` + `Code Cache` 共 246MB，保留登录态
+- 本轮手机布局排查自建的 6 个 `/tmp` 探针 profile + 6 个脚本 + 2 张截图
+- 按既定 `PNG_KEEP_DAYS=1` 清超期诊断截图 35 张
+
+合计磁盘回到 **6.2Gi**。
+
+### 长期自愈：独立守护 + 单实例锁
+
+新增 `scripts/cache-cleaner.mjs`：按 `accounts` 下各账号 `meta.json` 的 `port` + 固定 9750
+动态发现端口（不写死账号名），逐个 CDP `Network.clearBrowserCache`，连不上的端口静默跳过，
+退出码恒 0 绝不阻断主循环。
+
+新增 `scripts/run-cache-cleaner.sh`：启动即清一次，之后每 1800 秒清一次；
+`/tmp/fudai-cache-cleaner.lock` 单实例锁，多个 supervisor 同时拉起也只有一个守护。
+`run-h35.sh` 启动时 `nohup` 拉起它，锁保证不重复；守护脱离 supervisor，
+supervisor 重启 / 被杀时清理不受影响。日志 `douyin-auto/cache-cleaner.log`。
+
+⚠ **绝不 `pkill -f cache-cleaner`**，按 lock 里的精确 PID 停。
+守护进程数期望 **1**，与 2 个 `run-h35.sh`、1 个 `run-public.sh`、1 个 `public-readonly.mjs`、
+1 条 `tunnel --url http://127.0.0.1:8898` 并存都是预期。
+
+### 验证
+
+- `node --check` / 两个 `bash -n` 全通过
+- 单实例锁：连续拉起 2 次，守护仍 1 个，第二次打印「已有守护实例」
+- 短间隔 3 秒隔离测试：8 秒内清 3 轮，循环确实重复触发
+- 幂等：缓存已空再清返回 OK
+- 隔离副本验证 `trap` / 进程脱离，测试残留野进程全部按精确 PID 清理，未碰生产 supervisor
+- 正式守护 PID 9060、ppid=1，lock 存活
+- 全量健康：双实例自检 OK、hunter 2、`9750/9752` 各 1、`9751=0`、`8899/8898` 200、
+  公网 GET 200 / POST 403、`todayTotal=51=byAccount 合计`、wins 0、disk 6.2Gi、free 71%、load 5.55
+
+期间 `9752` 出现 `LOGIN_SUSPECT no-comment-box` 与连续 3 次 `EMPTY_PAGE len=20`，
+按纪律复测 + CDP 硬判据：连续 5 次 `len=617~663`、`needLogin=false`、评论框 1、`LM=1`，
+且 14:15:46 命中福袋、14:16:06 `joined` 进入守候 —— 属导航瞬态，非卡死非掉线。
+
+提交 `20e9339`，绿色包已同步 3 个脚本。
+
+**教训**：「清理逻辑存在」不等于「清理逻辑执行」。凡是写在长驻进程循环顶部的维护代码，
+都必须确认这个循环在正常运行期间**真的会回到顶部**；阻塞式前台子进程会让 while 循环形同虚设。
+另外磁盘告警不能只看 `df` 百分比，要按绝对 GiB 判阈值，并量化「单位时间增长源」再动手。
