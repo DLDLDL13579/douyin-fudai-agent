@@ -1922,3 +1922,51 @@ ingress、zone、CNAME 全在 Cloudflare 侧配置，本机没有 API token（�
   再按 `tunnel --url http://127.0.0.1:8898` 精确杀 cloudflared 与 `8898` 代理；
   **不要 `pkill -f cloudflared`**，会连带杀掉 DSH 自己两条隧道。
 - 提交 `2857091`，绿色包已同步两个新文件。
+
+## 2026-11-06 12:00：手机看板只剩一张卡片 —— CSS Grid 命名区域未复位
+
+用户发手机截图「面板看起来有很大问题」：整屏被「主播档案（累计）」占满、右侧带内部滚动条，
+「以上为今日真实到位」小字串到主播列表中间，福袋事件/指定主播/账号/日志/学习 5 张卡片全不见。
+
+### 根因（两个独立 CSS bug 叠加，都用无头 Chrome 按 390px 视口实测定性）
+
+**Bug 1：`grid-area` 未复位导致 6 张卡片完全重叠。**
+1100px 断点用 `grid-template-areas:"events pinned" ...` 给 6 张卡片各指定了 `grid-area:events/pinned/...`；
+900px 断点只写了 `grid-template-areas:none` 和 `max-height:300px`，**没有复位 `.main > .card` 的 `grid-area`**。
+命名区域被取消后，卡片仍带着不存在的名字，全部被丢进同一个隐式格子。
+实测 6 张卡片 `getBoundingClientRect()` 完全相同（x=28,y=352,w=618,h=1215），
+屏幕只剩最后绘制的「主播档案」，被压在下面的「学习/执行结果」文字透出来就成了那行串位小字。
+
+修法：900px 与 700px 两处断点都补 `.main > .card { grid-area:auto !important }`。
+
+**Bug 2：裸 `1fr` 被内容撑破，手机横向溢出。**
+单列轨道写成 `grid-template-columns:1fr`（默认 `min-width:auto`），
+被 `.row` / `.kv` 的 `white-space:nowrap` 长文本撑到 887px，
+`vw=390` 却 `docScrollW=899` → 截图右侧那条"滚动条"。
+
+修法：轨道改 `minmax(0,1fr)`，`.main` 与 `.main .card` 补 `min-width:0`，
+700px 断点加 `body{overflow-x:hidden}` 兜底。
+
+### 顺带修的两处手机体验
+
+- 「主播档案」几十行高 1200px+ 会把底部时间线顶到屏幕外 → 700px 断点给最后一张卡片
+  `max-height:360px` + 内部 `overflow-y:auto`，仍可上下滑看完整档案
+- 「学习/执行结果」的 `.split2` 双列在手机窄屏挤成一团文字 → 560px 断点改单列
+
+### 验证（独立无头 Chrome，不碰 9750/9752）
+
+| 视口 | 结果 |
+|:---|:---|
+| 手机 390 | 单列 6 张独立，`gridArea=auto`，无重叠，`docScrollW=375`，溢出元素 0 |
+| 中屏 800 | 单列 6 张独立 |
+| 桌面 1440 | 3×2 正常（3 列 / 2 行），未被破坏 |
+
+截图确认：KPI 2×2、当前监控、福袋事件、学习/执行结果、主播档案（限高可滚）、
+今日时间线、底部「就绪 · 公网只读」全部正常，启停按钮仍被只读层隐藏。
+数据一致性 `todayTotal=36=byAccount 合计`、公网 GET 200 / POST 403、双实例自检 OK 均未受影响。
+
+提交 `8ccef45`，绿色包已同步 `web/server.mjs`。
+
+**教训**：用 `grid-template-areas` 做响应式时，`areas:none` 与「复位每个子项的 `grid-area`」
+必须成对出现，否则命名区域消失后子项会全部塌进同一个隐式格子。
+这个故障在桌面完全看不出来，只有窄屏断点才暴露。
