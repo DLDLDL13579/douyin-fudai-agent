@@ -3,12 +3,27 @@
 # 2026-11-03 在此栽过一次（盲跑 18 小时），固化成每次巡检必查。
 PORT="${1:-9750}"
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-# ⚠ 日志必须跟着端口走，否则查 9751 时会拿主实例的「守候开奖」误放行。
+# ⚠ 日志必须跟着端口走，否则查账号实例时会拿主实例的「守候开奖」误放行。
 #    2026-11-05 02:57 踩过：9751 页面 len=20「直播加载中」，却因主实例在守候而报 OK。
-case "$PORT" in
-  9751) DEFAULT_LOG="$ROOT_DIR/accounts/main2/work/h35.log" ;;
-  *)    DEFAULT_LOG="$ROOT_DIR/douyin-auto/h35.log" ;;
-esac
+#    2026-11-06 09:39 改为按 accounts/*/meta.json 的 port 反查账号目录：
+#    账号可增删（main2 已删、main3 用 9752），写死端口→目录的映射必然再次失效。
+DEFAULT_LOG="$ROOT_DIR/douyin-auto/h35.log"
+if [ "$PORT" != "9750" ]; then
+  ACC_DIR="$(node -e "
+    const fs=require('fs'),p=require('path');
+    const root='$ROOT_DIR/accounts';
+    try{
+      for(const n of fs.readdirSync(root)){
+        const f=p.join(root,n,'meta.json');
+        if(!fs.existsSync(f))continue;
+        if(String(JSON.parse(fs.readFileSync(f,'utf8')).port||'')==='$PORT'){
+          process.stdout.write(p.join(root,n,'work','h35.log'));break;
+        }
+      }
+    }catch(e){}
+  ")"
+  [ -n "$ACC_DIR" ] && DEFAULT_LOG="$ACC_DIR"
+fi
 LOG_PATH="${DY_ALIVE_LOG:-$DEFAULT_LOG}"
 DY_ALIVE_LOG="$LOG_PATH" node -e "
 (async()=>{
