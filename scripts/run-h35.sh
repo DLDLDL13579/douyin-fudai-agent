@@ -5,26 +5,19 @@
 cd "$(dirname "$0")"
 BASE="$1"
 ACCOUNT="$2"
-CACHE_MAX_MB=500      # 双源采集后缓存增长更快（3.5h 涨 700MB），阈值降到 500
-PNG_KEEP_DAYS=1       # 诊断截图保留天数（3天→1天：每天 100+ 张，实测 3 天积到 580MB）
-# 运行时缓存清理由独立守护 scripts/run-cache-cleaner.sh 负责（单实例锁，30 分钟周期）。
-# 本 supervisor 只在启动时尝试拉起它，锁保证全机只有一个守护，不重复。
+# ⚠ 2026-11-07 移除此处的 CACHE_MAX_MB / PNG_KEEP_DAYS 与 while 内的清理段：
+#   它们写在阻塞式 `node hunter35.mjs` 之前，7×24 下 hunter 永不退出 → 清理段
+#   从未执行过。实测累计 1516 张 / 474MB 截图，其中 110 张 / 41MB 已过期。
+#   运行时清理由两个独立守护负责（各带单实例锁，本 supervisor 只负责拉起）：
+#     scripts/run-cache-cleaner.sh  → CDP Network.clearBrowserCache 清 Chrome 缓存
+#     scripts/runtime-cleaner.sh    → 过期截图 + 日志轮转
+#   与 11-06 的缓存清理失效是同一病根，修法一致。
 
-# ⚠ profile 路径与 hunter35.mjs 必须一致：
-#   非账号模式 → <工作目录>/chrome-profile
-#   账号模式   → accounts/<名字>/profile（不是 <工作目录>/chrome-profile）
-#   2026-11-03 发现两者不一致，supervisor 一直在清理一个不存在的目录，缓存回收完全失效。
 # 应用根 = scripts 的上一级；不再写死 macOS 绝对路径（绿色包/多机分发需要）
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ACC_ROOT="$ROOT_DIR/accounts"
-if [ -n "$ACCOUNT" ]; then
-  PROFILE="$ACC_ROOT/$ACCOUNT/profile"
-else
-  PROFILE="$BASE/chrome-profile"
-fi
 
 # 端口：显式传入 > meta.json 登记 > 9750
-
 if [ -n "${3:-}" ]; then
   PORT="$3"
 elif [ -n "$ACCOUNT" ] && [ -f "$ACC_ROOT/$ACCOUNT/meta.json" ]; then
@@ -33,53 +26,27 @@ else
   PORT=9750
 fi
 
-# 判断 Chrome 是否已退出（不用 pgrep -f，避免自匹配）
-# ⚠ 端口不能写死 9750：多账号并行时每个实例端口不同，写死会让实例 B 永远看到
-#   「Chrome 在跑」，从而跳过缓存回收，缓存无限增长。
-chrome_running() {
-  ps -eo args | grep -F "remote-debugging-port=$PORT" | grep -v grep >/dev/null 2>&1
-}
-
-# ── 运行时缓存守护（2026-11-06）
-# ⚠ 原清理逻辑有两个致命前提：写在 while 顶部 + 要求 ! chrome_running。
-#   但 node hunter35.mjs 是阻塞式前台运行，7×24 下 hunter / Chrome 都不退出，
-#   清理代码永远不执行 → Default/Cache 无限增长。实测 1 小时涨 415MB，
-#   两个 profile 的 Cache 合计 1.16GB，磁盘 6.2Gi → 4.5Gi 触发告警。
-# 改为独立守护进程：用 CDP Network.clearBrowserCache 在 Chrome 运行时清缓存，
-#   不动文件句柄、不重启、不碰登录态，实测幂等且自检仍 OK。
-# run-cache-cleaner.sh 自带单实例锁，任意 supervisor 拉起都安全，不会双守护。
-# 用 nohup 让它脱离 supervisor：supervisor 重启 / 被杀时清理守护不受影响。
+# ── 运行时清理守护（11-06 缓存 / 11-07 截图与日志）
+# ⚠ 两次踩同一个坑：清理段原本写在 while 顶部、还要求 ! chrome_running，
+#   但下面的 node hunter35.mjs 是阻塞式前台运行，7×24 下永不退出 →
+#   清理代码从未执行。缓存涨到 1.16GB 触发磁盘告警，截图堆到 1516 张 / 474MB。
+# 修法：一律拆成独立守护，各带单实例锁，本 supervisor 只负责启动即拉起。
+#   run-cache-cleaner.sh → CDP Network.clearBrowserCache（运行时清，不动登录态）
+#   runtime-cleaner.sh   → 过期截图 + 日志轮转
+# 用 nohup 让守护脱离 supervisor，重启 / 被杀时清理不受影响。
 if [ -f "$ROOT_DIR/scripts/run-cache-cleaner.sh" ]; then
   nohup bash "$ROOT_DIR/scripts/run-cache-cleaner.sh" >> "$BASE/h35.log" 2>&1 < /dev/null &
 fi
+# 过期截图 + 日志轮转守护（2026-11-07，同样单实例锁）
+if [ -f "$ROOT_DIR/scripts/runtime-cleaner.sh" ]; then
+  nohup bash "$ROOT_DIR/scripts/runtime-cleaner.sh" >> "$BASE/runtime-cleaner.log" 2>&1 < /dev/null &
+fi
 
 while true; do
-  # ── 1. 清理过期诊断截图，防止 7×24 跑下来撑爆磁盘
-  # 清理所有诊断截图（原规则只匹配 h35-*.png，导致 h34-/h20-/ac- 等旧前缀永久堆积：
-    # 实测 664 张截图里 495 张是 10-29~10-31 的旧文件，占用 580MB 却一张都没被清）
-    find "$BASE" -maxdepth 1 -name '*.png' -mtime +$PNG_KEEP_DAYS -delete 2>/dev/null
-
-  # ── 2. Chrome 缓存超阈值时回收（Cache/Code Cache 可安全删除，不含登录态）
-  if ! chrome_running; then
-    for d in "Default/Cache" "Default/Code Cache" "Default/GPUCache" "GraphiteDawnCache"; do
-      if [ -d "$PROFILE/$d" ]; then
-        SZ=$(du -sm "$PROFILE/$d" 2>/dev/null | awk '{print $1}')
-        if [ "${SZ:-0}" -gt "$CACHE_MAX_MB" ]; then
-          rm -rf "${PROFILE:?}/$d" 2>/dev/null
-          echo "[supervisor] 清理 Chrome 缓存 $d ${SZ}MB at $(date '+%m-%d %H:%M:%S')" >> "$BASE/h35.log"
-        fi
-      fi
-    done
-    # 日志超过 20MB 就截断保留最近 5000 行
-    if [ -f "$BASE/h35.log" ]; then
-      LSZ=$(du -sm "$BASE/h35.log" 2>/dev/null | awk '{print $1}')
-      if [ "${LSZ:-0}" -gt 20 ]; then
-        tail -5000 "$BASE/h35.log" > "$BASE/h35.log.tmp" 2>/dev/null && mv "$BASE/h35.log.tmp" "$BASE/h35.log"
-      fi
-    fi
-  fi
-
-  # ── 3. 启动主程序（门槛由 data/threshold.json 决定，不在此硬编码）
+  # ── 启动主程序（门槛由 data/threshold.json 决定，不在此硬编码）
+  # ⚠ 清理逻辑一律放在独立守护里，不要写回这个 while：
+  #   下面 node hunter35.mjs 是阻塞式前台运行，7×24 下不退出，
+  #   写在它之后的任何清理代码都永远不会执行（11-06 缓存、11-07 截图两次踩坑）。
   if [ -n "$ACCOUNT" ]; then
     DY_NIGHT_START=19 DY_NIGHT_END=24 \
     DY_ROOMS=1 DY_BATCH_MIN=12 DY_PORT="$PORT" \
