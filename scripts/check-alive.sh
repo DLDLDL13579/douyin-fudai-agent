@@ -47,13 +47,18 @@ DY_ALIVE_LOG="$LOG_PATH" node -e "
     //   真正的判据不是「长度多少」，而是「长度是否已经稳定」：
     //   连续两次读到 >=350 且相差 <40，才算渲染完成。
     const nap=(ms)=>new Promise(r=>setTimeout(r,ms));
-    let len=0, prev=-1, stable=false, needLogin=false, commentBox=0;
+    let len=0, prev=-1, stable=false, needLogin=false, loginStreak=0, commentBox=0;
     for(let a=0;a<8;a++){
       const d=await send('Runtime.evaluate',{expression:'(()=>{const t=document.body.innerText||\"\";return JSON.stringify({len:t.length,needLogin:/需先登录|请先登录|登录后参与|登录后可参与|登录后才能/.test(t),commentBox:document.querySelectorAll(\"[placeholder*=说点什么],[contenteditable=true]\").length})})()',returnByValue:true});
       let info={};
       try{ info=JSON.parse(d.result.value||'{}'); }catch(e){}
       len=info.len||0;
-      if(info.needLogin) needLogin=true;
+      // 🔴 单帧登录文案可能是导航瞬态，必须连续 2 帧才判真掉线。
+      //    旧写法 if(info.needLogin) needLogin=true 只置位不清除，8 帧里任意一帧
+      //    撞上瞬态就永久放大成 LOGIN_EXPIRED（2026-11-09 15:47 9752 实测误报）。
+      //    真掉线文案必然连续多帧存在，单帧瞬态归零后不影响下一帧判断。
+      loginStreak = info.needLogin ? loginStreak+1 : 0;
+      if(loginStreak>=2) needLogin=true;
       commentBox=info.commentBox||0;
       if(len>=350 && Math.abs(len-prev)<40){ stable=true; break; }
       prev=len;
