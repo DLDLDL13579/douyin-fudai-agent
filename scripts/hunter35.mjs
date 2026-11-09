@@ -683,15 +683,13 @@ async function _ensureFollowImpl(tab, room){
     // 🔴 2026-11-09 二次订正：点击「关注」后抖音会弹「1 钻石加入粉丝团」全屏浮层，
     //    浮层期间「关注」按钮会从 DOM 移除，旧探针把这种假消失判成 btn-gone 成功。
     //    实测 main3 11 次 btn-gone 全是浮层假阳性，重载后「关注G」按钮回来、关注数仍 0。
-    //    现在验证前先按 Escape 关浮层（只发按键，不点页面空白处以免误触导航），
-    //    且「按钮消失」必须同时满足「头部出现 +加粉丝团/加会员」才算确定已关注。
-    const dismissFansPanel = async()=>{
-      try{
-        await tab.cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},8000);
-        await tab.cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},8000);
-        await sleep(1200);
-      }catch(e){}
-    };
+    //    ⚠ 2026-11-09 15:27 副作用订正：曾用 Escape 主动关浮层，实测会让页面多出
+    //    一层全局导航（len 744→1194，头部「+加粉丝团/加会员」被「精选|搜索」替换），
+    //    验证拿不到已关注组件，新进程前 2 条关注全被 btn-gone-unverified 拦下。
+    //    现不再主动操作页面：浮层存在时直接 inconclusive，交给既有 45s 短冷却重试；
+    //    重试时浮层已自然消失，真关注成功会被 st 探针判 already，未落库则再次看到
+    //    「关注G」按钮重新点击，不虚报成功。
+    //    仅「按钮消失」必须同时满足「头部出现 +加粉丝团/加会员」才算确定已关注。
     const verifyExpr = `(()=>{
       var b=document.body&&document.body.innerText||'';
       var len=b.length;
@@ -722,12 +720,10 @@ async function _ensureFollowImpl(tab, room){
       if(!hasFollowedUi) return {done:false, how:'btn-gone-unverified', len:len, still:false, head:head.slice(0,80), inconclusive:true};
       return {done:true, how:'btn-gone', len:len, still:false, head:head.slice(0,80)};
     })()`;
-    await dismissFansPanel();
     let v = await ev(tab, verifyExpr, 20000);
     let recoveredOnRetry=false;
     if((!v || !v.done) && VERIFY_RETRY_MS>0 && !v.__err){
       await sleep(VERIFY_RETRY_MS);
-      await dismissFansPanel();   // 二次验证前再关一次浮层，避免残留面板干扰
       const v2 = await ev(tab, verifyExpr, 20000);
       if(v2 && !v2.__err && v2.done){ v=v2; recoveredOnRetry=true; }
       else if(v2 && !v2.__err){ v=v2; }   // 二次仍失败，用最新的 DOM 诊断
@@ -753,7 +749,7 @@ async function _ensureFollowImpl(tab, room){
       retryRecovered:recoveredOnRetry
     };
     return {ok, inconclusive, diag,
-      reason: ok?(recoveredOnRetry?'recovered-follow':(v.how||'now-followed')):(inconclusive?'page-loading':'clicked-unverified'), btn:b};
+      reason: ok?(recoveredOnRetry?'recovered-follow':(v.how||'now-followed')):(inconclusive?((v&&v.how)||'page-loading'):'clicked-unverified'), btn:b};
   }catch(e){ return {ok:false, inconclusive:true, diag:{verifyHow:'exception',err:String(e.message).slice(0,80)}, reason:String(e.message).slice(0,40)}; }
 }
 

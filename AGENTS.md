@@ -2382,9 +2382,14 @@ main3「关注 0」、主号「关注 150」，看板没错，是账号真的一
    `/user/self` 的全局关注数**不是**逐房间判据，代码从不读它。
 3. **浮层排除**：`fansPanel = /钻石加入粉丝团|酷炫勋章|专属礼物|进场特效/`。
    浮层存在且无按钮时返回 `inconclusive:reason:'fans-panel'`，不判已关注、不判可点。
-4. **点击后验证收紧**：验证前先按 `Escape` 关浮层（不点页面空白处避免误触导航）；
-   `fansPanel` 仍在 → `fans-panel` 不确定；按钮消失但头部无已关注态组件 →
-   `btn-gone-unverified` 不确定；只有「按钮消失 + 头部有加粉丝团/加会员/已关注」才 `btn-gone` 成功。
+4. **点击后验证收紧**：`fansPanel` 仍在 → `fans-panel` 不确定；按钮消失但头部无已关注态
+   组件 → `btn-gone-unverified` 不确定；只有「按钮消失 + 头部有加粉丝团/加会员/已关注」
+   才 `btn-gone` 成功。⚠ **15:27 副作用订正**：初版曾主动发 `Escape` 关浮层，实测会让
+   页面多出一层全局导航（len 744→1194，头部被「精选|搜索」替换），验证拿不到已关注组件，
+   新进程前 2 条关注全被 `btn-gone-unverified` 拦下。现**不再主动操作页面**：浮层态直接
+   `inconclusive`，交给既有 `retryCooldownMs:45000` 短冷却重试；重试时浮层已自然消失，
+   真关注成功由 `st` 探针判 `already`，未落库则重新看到「关注G」按钮再次点击。
+   日志 `reason` 也改为显示真实 `verifyHow`，不再统一写成 `page-loading`。
 5. `data/follow-config.json` 的 `note` 订正，删除「`/user/self` 关注 0 ⇒ 判据是假阳性」的错误因果。
 6. `AGENTS.md` 上午章节标题加作废标注，顶部「关注时机」bullet 订正。
 
