@@ -35,6 +35,38 @@ trap 'rm -f "$LOCK"' EXIT INT TERM
 proxy_up() { curl -s -m 2 -o /dev/null "http://127.0.0.1:$PORT/api/status"; }
 tunnel_pid=""
 
+# ── 公网可达性探测（2026-11-09 18:51 事故）──────────────────────────────
+# 坑：cloudflared 进程活着、metrics ha_connections=1，但 edge 侧 HTTP/2 已静默断开，
+# 公网全返 530；而旧逻辑只看 find_tunnel_pid 进程是否存在 → 永远不重起，故障无限期挂着。
+# 修法：定期探一次公网，连续确认后精确 kill 这一条 8898 隧道让守护重建。
+# ⚠ 三重防误杀（quick tunnel 新域名在 edge 生效前也会短暂返 530）：
+#   ① 隧道重建后 GRACE_SEC=90 秒内不做僵死判定；
+#   ② 每 PROBE_INTERVAL=120 秒才探一次，不给外网加压；
+#   ③ 连续 STALE_CONFIRM=2 次异常才动手，单次网络抖动绝不重启。
+# 绝不用进程名批量杀 cloudflared（会连带杀掉 DSH 3080 与 dsh.dlcqp.asia 命名隧道）。
+PROBE_INTERVAL=120
+GRACE_SEC=90
+STALE_CONFIRM=2
+TUNNEL_STARTED_AT=0
+STALE_STREAK=0
+LAST_PROBE_AT=0
+LAST_TUNNEL_PID=""
+
+probe_public_code() {
+  local u; u="$(cat "$URL_FILE" 2>/dev/null | tr -d '\r\n')"
+  [ -z "$u" ] && return 0
+  curl -s -m 12 -o /dev/null -w '%{http_code}' "$u/" 2>/dev/null
+}
+
+kill_stale_tunnel() {
+  local p; p="$(find_tunnel_pid)"
+  if [ -n "$p" ]; then
+    echo "[public $(date '+%H:%M:%S')] 精确重启僵死隧道 pid=$p"
+    kill "$p" 2>/dev/null
+    for _ in 1 2 3 4 5; do kill -0 "$p" 2>/dev/null || break; sleep 1; done
+  fi
+}
+
 # 只找「指向本只读端口」的 cloudflared，绝不误杀 DSH 的 3080 隧道
 find_tunnel_pid() {
   # 2026-11-09 18:30：DSH 会话被 macOS seatbelt 限制时 /bin/ps 报
@@ -64,14 +96,45 @@ while true; do
   # 每轮都先按命令行查现存 PID：既认领手动起的隧道，也能发现子进程崩溃后重起
   live_pid=$(find_tunnel_pid)
   if [ -n "$live_pid" ]; then
+    if [ "$live_pid" != "$LAST_TUNNEL_PID" ]; then
+      # 新隧道刚起：给 edge 充分生效时间，僵死计数清零
+      LAST_TUNNEL_PID="$live_pid"
+      TUNNEL_STARTED_AT=$(date +%s)
+      STALE_STREAK=0
+    fi
     tunnel_pid="$live_pid"
   else
     echo "[public $(date '+%H:%M:%S')] 隧道不在，拉起"
     start_tunnel
+    LAST_TUNNEL_PID="$tunnel_pid"
+    TUNNEL_STARTED_AT=$(date +%s)
+    STALE_STREAK=0
     sleep 8
   fi
   # 每次循环把最新域名写盘，方便随时取用
   U=$(grep -oE 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' "$T_LOG" 2>/dev/null | tail -1)
   if [ -n "$U" ]; then echo "$U" > "$URL_FILE"; fi
+
+  # 公网可达性巡检：低频 + 宽限期 + 连续确认，只在确认僵死后精确重启
+  now_ts=$(date +%s)
+  if [ $((now_ts - TUNNEL_STARTED_AT)) -ge "$GRACE_SEC" ] &&
+     [ $((now_ts - LAST_PROBE_AT)) -ge "$PROBE_INTERVAL" ]; then
+    LAST_PROBE_AT=$now_ts
+    code="$(probe_public_code)"
+    if [ -z "$code" ] || [ "$code" = "200" ]; then
+      STALE_STREAK=0
+    else
+      STALE_STREAK=$((STALE_STREAK + 1))
+      echo "[public $(date '+%H:%M:%S')] 公网 HTTP $code 连续 ${STALE_STREAK}/${STALE_CONFIRM} 次"
+      if [ "$STALE_STREAK" -ge "$STALE_CONFIRM" ]; then
+        kill_stale_tunnel
+        STALE_STREAK=0
+        LAST_TUNNEL_PID=""
+        # 清空旧域名，避免下一轮拿已失效域名探测误判
+        : > "$URL_FILE"
+        sleep 8
+      fi
+    fi
+  fi
   sleep 10
 done
