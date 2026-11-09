@@ -595,7 +595,7 @@ async function _ensureFollowImpl(tab, room){
     //    重建时会漏扫，把「有关注按钮」误判成 no-follow-btn。
     //    ⚠ 抖音「已关注」的真实表现是左上角变成「+加粉丝团 / 加会员」，且不再有
     //    「关注」按钮；页面既不显示「已关注」也不显示「互相关注」。
-    const st = await ev(tab, `(()=>{
+    const stExpr = `(()=>{
       var b=document.body&&document.body.innerText||'';
       var bodyLen=b.length;
       // ① 头部区域文本（y<75, x<640）：「+加粉丝团 / 加会员」是已关注态专属组件。
@@ -647,9 +647,22 @@ async function _ensureFollowImpl(tab, room){
       //    /user/self 的全局关注数不是「该直播间是否关注」的判据，代码从不读它。
       var followed = followedWord || (bodyLen>=200 && !btn && !fansPanel && /加粉丝团|加会员/.test(head));
       return {followed, btn, bodyLen, fansPanel:fansPanel, head:head.slice(0,120), domBtn:domBtn, coordOnly:!!(btn&&!domBtn)};
-    })()`, 25000);
+    })()`;
+    let st = await ev(tab, stExpr, 25000);
+    // 🔴 2026-11-09 16:05 修复「需关注」死循环：抖音会主动弹粉丝团推广浮层，
+    //    浮层期间「关注」按钮被移除、头部出现「+加粉丝团/加会员」，与已关注态极像。
+    //    旧代码命中 fansPanel && !btn 就直接 return，连关注按钮都不点，45s 重试又撞
+    //    同一浮层 → main3 连续 6 次 need-follow（15:37~15:58 实测）。
+    //    只读 6 帧实测：浮层是瞬态，等待后按钮会回来（帧4 btn=关注G、四词全 -1）。
+    //    现改为等待复探最多 3 次，每次 1.5s；只有「浮层消失且仍无按钮」才判不确定。
+    //    全程不主动操作页面（Escape 会引入全局导航副作用，15:27 已验证），
+    //    也不放宽 allowInconclusive:false，关注成功仍须 verifyExpr 严格确认。
+    for(let probe=0; probe<3 && st && !st.__err && st.fansPanel && !st.btn; probe++){
+      await sleep(1500);
+      st = await ev(tab, stExpr, 25000);
+    }
     if(!st || st.__err) return {ok:false,inconclusive:true,reason:'probe-fail'};
-    // 浮层期间不下结论：既不能判已关注，也不能判「无按钮可点」，交给短冷却重试
+    // 浮层仍未消失且无按钮：不下结论，交给短冷却重试
     if(st.fansPanel && !st.btn){
       return {ok:false,inconclusive:true,reason:'fans-panel',
         diag:{verifyHow:'fans-panel',bodyLen:st.bodyLen,head:st.head}};
