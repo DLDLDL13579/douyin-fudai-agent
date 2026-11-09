@@ -2472,3 +2472,77 @@ main3 账号的关注请求被服务端接收但未持久化，属账号侧状�
     没有对照组，看到按钮回来就下了因果结论；补上同房间双账号 + reload 才收敛。
 3. 严格硬门禁在此处是**正确行为**：账号写不进去时宁可拦下福袋，
    也不能按「看起来关注了」放行。用户要的是「确定关注」，不是「点过关注」。
+
+## 2026-11-09 18:30：会话沙箱受限导致 7×24 全停与恢复
+
+### 一、现象
+
+17:52 巡检发现主实例 9750、main3 9752、看板 8899、只读 8898、公网隧道、
+两个清理守护**全部消失**；两个日志整齐停在 17:24:07~17:24:15，停机点都是
+「开奖后再蹲守 / f 值检查」，无 FATAL、无 LOGIN_EXPIRED、无中奖。
+`last reboot` 显示 10:52 开机后系统从未重启，排除电脑重启。
+
+同时出现两个环境变化：`/bin/ps` 报 `Operation not permitted`（TCC/seatbelt 权限变化），
+`node` 从 `v22.23.2` 变成 `v23.11.0`，说明 DSH 执行会话上下文被重建。
+
+### 二、根因：Chrome 自带沙箱无法初始化
+
+拉起 supervisor 后两个 hunter 每约 25 秒 `FATAL timeout` 一次、无限重启。
+手工最小启动对照抓到决定性证据：
+
+| 参数 | 结果 |
+|:---|:---|
+| 默认 | `stderr: sandbox initialization failed: Operation not permitted`，主进程 `signalCode=SIGTRAP`，CDP 10 秒不可连 |
+| `--no-sandbox` | CDP 2 秒就绪 |
+
+真实页面复核：`--no-sandbox` 下抖音分类页 `len=1918 / cards=120 / needLogin=false` 稳定渲染。
+即 seatbelt 限制让 Chrome 无法再建自己的沙箱，渲染器全挂 → 页面操作 20 秒超时 →
+`FATAL timeout`；`ps` 失效与 Chrome 沙箱失败同源。
+
+### 三、修复（4 个文件）
+
+1. `scripts/hunter35.mjs` / `scripts/account-manager.mjs`：Chrome 启动参数默认带
+   `--no-sandbox`，`DY_CHROME_NO_SANDBOX=0` 可关。两条链都改，登录/relogin 用的
+   Chrome 在同一会话里同样会失败。
+2. `scripts/run-h35.sh`：端口解析从 `node -e "require('<含中文绝对路径>/meta.json')"`
+   改为 `JSON.parse(fs.readFileSync(argv[1]))`，账号模式解析不到合法 port 直接
+   `exit 1`，绝不静默回落到 9750。恢复过程中曾实际出现 main3 的 Chrome 占用 9750
+   而 9752 无监听，即双实例抢同一端口。
+3. `web/run-public.sh`：`find_tunnel_pid` 的 `ps|grep` 加 `pgrep` 兜底。`ps` 失效时
+   原实现永远返回空 → 守护每 10 秒重复 spawn cloudflared，会形成隧道风暴。
+   精确匹配 `tunnel --url http://127.0.0.1:8898`，绝不触碰 DSH 的 3080 / 命名隧道。
+4. `dist/portable` 4 个文件同步，绿色包重打。
+
+### 四、恢复顺序与副作用验证
+
+恢复时先精确 kill 本项目 2 个 supervisor、2 个 node、2 个抓取 Chrome（按
+`user-data-dir` 精确匹配），清 `SingletonLock`，再按主实例 → main3 显式传 9752 →
+看板 8899 → 公网 8898 顺序拉起。`kill -9` 旧 node 会留下孤儿 Chrome 占 profile 锁，
+必须一并清理，否则新实例起不来。
+
+⚠ supervisor 内的 `nohup` 子进程在受限会话里随父 shell 被回收，两个清理守护
+`run-cache-cleaner.sh` / `runtime-cleaner.sh` 恢复后仍是 0 个。按既有约定手工拉起，
+各 1 个、锁 PID 存活、启动即清生效：9750 缓存 OK、截图清 34 张 14MB。
+
+终检全绿：
+
+```
+9750=1 9752=1 9751=0 8898=1 8899=1
+Chrome 9750=5 9752=5 | hunter 2 supervisor 2 cache 1 runtime 1 public 1 readonly 1
+双实例自检 OK | 今日 129 = byAccount 129 | 抖币 14=14 | 中奖 0
+公网 GET 200 / POST 403 | DSH 命名隧道 75830 未受影响
+free 67% disk 47Gi load 5.47 | 恢复后 FATAL 0
+```
+
+### 五、教训
+
+1. **`ps` 失效不是孤立现象**，它和 Chrome 沙箱初始化失败、`node` 版本被换往往同时出现，
+   说明执行会话被系统重新授权过。遇到「所有进程一夜之间整齐停在同一秒」先查会话权限，
+   别急着重装或改策略。
+2. **同一个 Chrome 二进制、同一份代码，在不同执行上下文里表现可以完全不同**。
+   判断浏览器能不能用，必须做「最小启动 + 真实页面 DOM 检测」两级验证，
+   只看 CDP 端口连上会漏掉渲染器全挂。
+3. **`kill -9` node 不会触发 `finally{chrome.kill}`**，会留下占 profile 锁的孤儿 Chrome，
+   下次启动必然失败。清理必须按 `user-data-dir` 精确匹配 Chrome 主进程。
+4. 会话受限时 `fudai.sh` 因依赖 `ps` 全部误判，改用不依赖 `ps` 的
+   `run-h35.sh` / `run-web.sh` 直接 `nohup` 拉起；`check-alive.sh` 走 CDP 不受影响。

@@ -18,10 +18,24 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 ACC_ROOT="$ROOT_DIR/accounts"
 
 # 端口：显式传入 > meta.json 登记 > 9750
+# ⚠ 2026-11-09 18:30：会话上下文重建后曾出现账号实例 Chrome 用 9750（与主实例抢端口）
+#    且 9752 无监听。原写法 `node -e "require('<含中文的绝对路径>/meta.json')"` 依赖
+#    require 解析非 ASCII 路径，不同 node 版本/执行上下文表现不一致，失败时静默
+#    catch 兜底 9750，把双实例打成一个端口。改为 argv 传路径 + JSON.parse 读文件，
+#    并对账号模式做硬校验：解析不到合法端口就直接退出，绝不静默回落到 9750。
 if [ -n "${3:-}" ]; then
   PORT="$3"
-elif [ -n "$ACCOUNT" ] && [ -f "$ACC_ROOT/$ACCOUNT/meta.json" ]; then
-  PORT=$(node -e "try{console.log(require('$ACC_ROOT/$ACCOUNT/meta.json').port||9750)}catch(e){console.log(9750)}")
+elif [ -n "$ACCOUNT" ]; then
+  META="$ACC_ROOT/$ACCOUNT/meta.json"
+  if [ ! -f "$META" ]; then
+    echo "[run-h35] 账号 $ACCOUNT 缺少 meta.json，拒绝启动（避免端口回落 9750）" >&2
+    exit 1
+  fi
+  PORT=$(node -e "try{const j=JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'));const p=Number(j.port);process.stdout.write(String(p>0&&p<65536?p:0))}catch(e){process.stdout.write('0')}" "$META" 2>/dev/null)
+  if [ -z "$PORT" ] || [ "$PORT" = "0" ]; then
+    echo "[run-h35] 无法从 $META 读取合法 port，拒绝启动（避免端口回落 9750）" >&2
+    exit 1
+  fi
 else
   PORT=9750
 fi

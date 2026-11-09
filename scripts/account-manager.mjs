@@ -227,6 +227,10 @@ function launchChrome(port, profile, { headless = false } = {}) {
     '--lang=zh-CN',
     'about:blank',
   ];
+  // 与 hunter35.mjs 同步：DSH 会话被 macOS seatbelt 限制时 Chrome 自带沙箱初始化失败
+  // （sandbox initialization failed + SIGTRAP），登录/扫码用的 Chrome 同样起不来。
+  // 默认带 --no-sandbox，需要强隔离时设 DY_CHROME_NO_SANDBOX=0。
+  if (process.env.DY_CHROME_NO_SANDBOX !== '0') args.push('--no-sandbox');
   if (!headless) args.unshift('--window-position=200,120');
   return spawn(CHROME, args, { stdio: 'ignore', detached: false });
 }

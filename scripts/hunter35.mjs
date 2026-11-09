@@ -1417,10 +1417,20 @@ async function checkOnline(tab,room){
 //      swiftshader 512% CPU ／ --disable-gpu 19% CPU ／ 默认无参数 33% CPU。
 //    故改用 --disable-gpu：渲染与 DOM 检测能力无损，福袋识别靠 DOM 而非像素。
 try{fs.rmSync(PROFILE+'/SingletonLock',{force:true});}catch(e){}
-const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`--user-data-dir=${PROFILE}`,
+// ⚠ 2026-11-09 18:15 决定性对照：DSH 会话被 macOS seatbelt 限制后（同时表现为
+//    /bin/ps 报 Operation not permitted、node 被换成别的版本），Chrome 自带沙箱无法初始化：
+//    stderr "sandbox initialization failed: Operation not permitted" + 主进程 SIGTRAP，
+//    渲染器全挂 → 页面操作 20s 超时 → hunter35 每约 25s 一次 "FATAL timeout" 无限重启，
+//    双实例与看板全停。对照：加 --no-sandbox 后 CDP 2s 就绪、抖音分类页
+//    len=1918 / cards=120 / needLogin=false 稳定渲染。故默认带 --no-sandbox
+//    （headless 自动化浏览器通用做法，只访问抖音、不涉及账号门禁）；会话恢复正常且
+//    需要强隔离时设 DY_CHROME_NO_SANDBOX=0 关闭。
+const CHROME_ARGS=['--headless=new',`--remote-debugging-port=${PORT}`,`--user-data-dir=${PROFILE}`,
  '--no-first-run','--no-default-browser-check','--disable-gpu',
  '--disable-dev-shm-usage','--window-size=1440,900','--mute-audio','--disable-blink-features=AutomationControlled',
- `--user-agent=${UA}`,'--lang=zh-CN','about:blank'],{stdio:'ignore'});
+ `--user-agent=${UA}`,'--lang=zh-CN','about:blank'];
+if(process.env.DY_CHROME_NO_SANDBOX!=='0') CHROME_ARGS.push('--no-sandbox');
+const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
 
 (async()=>{
   try{

@@ -37,7 +37,15 @@ tunnel_pid=""
 
 # 只找「指向本只读端口」的 cloudflared，绝不误杀 DSH 的 3080 隧道
 find_tunnel_pid() {
-  ps -eo pid,args | grep -F "tunnel --url http://127.0.0.1:$PORT" | grep -v grep | awk '{print $1}' | head -1
+  # 2026-11-09 18:30：DSH 会话被 macOS seatbelt 限制时 /bin/ps 报
+  # Operation not permitted，原 ps|grep 永远返回空 → 守护误判「隧道不在」，
+  # 每 10 秒重复 spawn cloudflared，形成隧道风暴。pgrep 在该上下文仍可用。
+  # 精确匹配 8898 只读入口，绝不触碰 DSH 的 3080 / 命名隧道。
+  if command -v pgrep >/dev/null 2>&1; then
+    pgrep -f "tunnel --url http://127.0.0.1:$PORT" 2>/dev/null | head -1
+  else
+    ps -eo pid,args 2>/dev/null | grep -F "tunnel --url http://127.0.0.1:$PORT" | grep -v grep | awk '{print $1}' | head -1
+  fi
 }
 
 start_tunnel() {
