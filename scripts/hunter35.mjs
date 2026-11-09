@@ -590,74 +590,108 @@ const SCAN=`(()=>{
 //      exec-actions.jsonl，带 at/account，看板按本地日过滤，只认真实到位。
 async function _ensureFollowImpl(tab, room){
   try{
-    // 🔑 用 elementFromPoint 扫描左上角，找 BUTTON（关注按钮 innerText 含快捷键，不能精确匹配）
-    //    ⚠ 2026-11-05 干净对照实测：抖音「已关注」的真实表现是左上角变成「+加粉丝团」，
-    //      页面里既不显示「已关注」也不显示「互相关注」。旧探针只认这两个词，
-    //      于是把「已关注」误判成 no-btn；tryJoin 里 cond-follow:fail(no-btn) 直接
-    //      return need-follow 放弃参与，今日 4 个福袋就是这么丢的。
+    // 🔑 关注按钮定位：button DOM 直查优先，elementFromPoint 坐标扫描兜底。
+    //    🔴 2026-11-09 修复：旧探针只靠坐标扫描，页面头部被活动条占位或 UI 尚未
+    //    重建时会漏扫，把「有关注按钮」误判成 no-follow-btn。
+    //    ⚠ 抖音「已关注」的真实表现是左上角变成「+加粉丝团 / 加会员」，且不再有
+    //    「关注」按钮；页面既不显示「已关注」也不显示「互相关注」。
     const st = await ev(tab, `(()=>{
-      var followed=false, btn=null, bodyLen=(document.body.innerText||'').length;
-      // ① 服务端视角：只认页面「明确写出」已关注态（已关注/互相关注/关注成功 toast）。
-      //    只取 y<70 且 x<600 的头部文本，避免把弹幕/商品卡里的「加粉丝团」算进来。
-      //    🔴 2026-11-09 收紧：删除原「头部有加粉丝团 + 无关注按钮 ⇒ 已关注」推断。
-      //    实证 main3 的 /user/self 显示「关注 0」，而 exec-actions.jsonl 里
-      //    185 次被判 already / fans-group-state 记 ok，等于一次都没真点过关注。
-      //    抖音对未关注账号同样显示粉丝团入口，该推断是假阳性根因。
+      var b=document.body&&document.body.innerText||'';
+      var bodyLen=b.length;
+      // ① 头部区域文本（y<75, x<640）：「+加粉丝团 / 加会员」是已关注态专属组件。
+      //    只取这个区域，避免把弹幕、商品卡里的「加粉丝团」文字误算进来。
       var head='';
       for(const el of document.querySelectorAll('button,div,span,a')){
         var r=el.getBoundingClientRect();
-        if(r.y>70||r.x>600||r.width<10||r.height<8)continue;
+        if(r.y>75||r.x>640||r.width<10||r.height<8)continue;
         var h=(el.innerText||'').trim();
         if(h&&h.length<=14) head += h.replace(/\\n/g,'') + '|';
       }
-      var b=document.body&&document.body.innerText||'';
-      if(/关注成功/.test(b) || /已关注|互相关注/.test(head)) followed=true;
-      // ② 扫描左上角找「关注」按钮（未关注态）
-      for(var y=15;y<=60;y+=4){
-        for(var x=60;x<=430;x+=5){
-          var el2=document.elementFromPoint(x,y);
-          if(!el2)continue;
-          var t2=(el2.innerText||el2.textContent||'').trim();
-          if(!t2||t2.length>12)continue;
-          if(t2.indexOf('已关注')>=0||t2.indexOf('互相关注')>=0){ followed=true; continue; }
-          if(t2.indexOf('关注')>=0 && t2.indexOf('加粉丝团')<0 && !btn){
-            var rc=el2.getBoundingClientRect();
-            if(rc.width>=30&&rc.height>=16&&rc.width<120){
-              btn={x:Math.round(rc.x+rc.width/2), y:Math.round(rc.y+rc.height/2), w:Math.round(rc.width), t:t2.slice(0,8)};
+      // ② 关注按钮：DOM 直查优先
+      var btn=null, domBtn=false;
+      for(const el of document.querySelectorAll('button')){
+        var t=(el.innerText||'').trim(), rc=el.getBoundingClientRect();
+        if(!/^关注/.test(t) || t.indexOf('加粉丝团')>=0) continue;
+        if(rc.y>110||rc.width<30||rc.height<16||rc.width>=160) continue;
+        btn={x:Math.round(rc.x+rc.width/2), y:Math.round(rc.y+rc.height/2), w:Math.round(rc.width), t:t.slice(0,8), via:'dom'};
+        domBtn=true; break;
+      }
+      var followedWord=(/关注成功/.test(b) || /已关注|互相关注/.test(head));
+      // ⚠ 点击「关注」后会弹「1 钻石加入粉丝团」浮层，浮层期间头部也会出现
+      //    「+加粉丝团 / 加会员」，且「关注」按钮被移除。若不加排除，下面的
+      //    已关注判据会把「浮层中的未关注态」误判成 already（实测 main3 的
+      //    11 次假 btn-gone 就是这么来的）。浮层存在时一律不判已关注。
+      var fansPanel=/钻石加入粉丝团|酷炫勋章|专属礼物|进场特效/.test(b);
+      // ③ DOM 没找到时，坐标扫描兜底
+      if(!btn){
+        for(var y=15;y<=70;y+=4){
+          for(var x=60;x<=440;x+=5){
+            var el2=document.elementFromPoint(x,y); if(!el2)continue;
+            var t2=(el2.innerText||el2.textContent||'').trim();
+            if(!t2||t2.length>12)continue;
+            if(t2.indexOf('已关注')>=0||t2.indexOf('互相关注')>=0){ followedWord=true; continue; }
+            if(t2.indexOf('关注')>=0 && t2.indexOf('加粉丝团')<0){
+              var rc2=el2.getBoundingClientRect();
+              if(rc2.width>=30&&rc2.height>=16&&rc2.width<160){
+                btn={x:Math.round(rc2.x+rc2.width/2), y:Math.round(rc2.y+rc2.height/2), w:Math.round(rc2.width), t:t2.slice(0,8), via:'coord'};
+              }
             }
           }
+          if(btn)break;
         }
-        if(btn)break;
       }
-      return {followed, btn, bodyLen, head:head.slice(0,120)};
+      // ④ 确定已关注 = 明确文字，或「页面已渲染 + 无关注按钮 + 头部有已关注态组件」。
+      //    🔴 2026-11-09 订正：上午误删了这条判据，导致 54 次已关注房间被判不确定、
+      //    55 个福袋被拦下。同房间双账号对照实测：已关注账号头部是「+加粉丝团/加会员」
+      //    且无关注按钮，未关注账号头部是「关注G」且无粉丝团入口。
+      //    /user/self 的全局关注数不是「该直播间是否关注」的判据，代码从不读它。
+      var followed = followedWord || (bodyLen>=200 && !btn && !fansPanel && /加粉丝团|加会员/.test(head));
+      return {followed, btn, bodyLen, fansPanel:fansPanel, head:head.slice(0,120), domBtn:domBtn, coordOnly:!!(btn&&!domBtn)};
     })()`, 25000);
     if(!st || st.__err) return {ok:false,inconclusive:true,reason:'probe-fail'};
-    if(st.followed) return {ok:true,reason:'already'};
-    // 🔴 2026-11-09 收紧（用户定稿「硬判据 + 不确定拦截」）：
-    //    找不到「关注」按钮且页面没有明确「已关注」文字时，一律 inconclusive。
-    //    旧逻辑用「头部有加粉丝团 + 无关注按钮 ⇒ 已关注」推断，实证是假阳性根因：
-    //    main3 的 /user/self 显示「关注 0」，却因这条被判 already / fans-group-state
-    //    记了 185 次 ok，等于一次都没真点过关注。抖音对未关注账号同样显示粉丝团入口。
-    //    现在 inconclusive 不再放行（follow-config.json allowInconclusive:false），
-    //    这类房间会被拦下不抢，直到页面真正渲染出可点的「关注」按钮并点击成功。
+    // 浮层期间不下结论：既不能判已关注，也不能判「无按钮可点」，交给短冷却重试
+    if(st.fansPanel && !st.btn){
+      return {ok:false,inconclusive:true,reason:'fans-panel',
+        diag:{verifyHow:'fans-panel',bodyLen:st.bodyLen,head:st.head}};
+    }
+    if(st.followed){
+      // 🔴 2026-11-09 订正：恢复「已关注」判据。抖音已关注态的 DOM 表现就是
+      //    「关注」按钮消失 + 头部出现「+加粉丝团 / 加会员」，页面没有「已关注」文字。
+      //    上午误删这条判据，导致本轮 54 次已关注房间被判 no-follow-btn(不确定)，
+      //    连带 55 个福袋被 need-follow 拦下。同房间双账号对照已验证：
+      //    已关注账号无关注按钮且有粉丝团入口，未关注账号有「关注G」且无粉丝团入口。
+      //    判据要求 bodyLen>=200（页面真渲染完）+ 无关注按钮 + 头部有专属组件，三者缺一仍拦截。
+      return {ok:true,reason:'already',diag:{verifyHow:'already',bodyLen:st.bodyLen,head:st.head,
+        domBtn:st.domBtn,coordOnly:st.coordOnly}};
+    }
+    // 🔴 2026-11-09 订正：只有「页面渲染好 + 无关注按钮 + 头部也没有已关注态组件」
+    //    才是真不确定，仍按 allowInconclusive:false 拦截，不放宽用户定稿的硬门禁。
     if(!st.btn){
-      return {ok:false,inconclusive:true,reason:'no-follow-btn'};
+      return {ok:false,inconclusive:true,reason:'no-follow-btn',
+        diag:{verifyHow:'no-follow-btn',bodyLen:st.bodyLen,head:st.head,
+          domBtn:st.domBtn,coordOnly:st.coordOnly}};
     }
 
     const b=st.btn;
     await clickXY(tab, b.x, b.y);
     await sleep(5000);   // 关注请求 + UI 刷新需要时间，3.5s 偏短
 
-    // 验证（2026-11-09 收紧为硬判据）：只认三类真实信号，任一成立才算成功：
-    //      ① 「关注成功」toast   ② 页面明确出现「已关注 / 互相关注」
-    //      ③ 点击后原「关注」按钮确实消失（btn-gone）
-    //    🔴 删除原「头部出现加粉丝团 + 无关注按钮 ⇒ 成功」分支：
-    //    抖音对未关注账号也显示粉丝团入口，这条让 main3 记了 127 次假 ok。
-    //    页面没加载好（len<200）或按钮仍在时一律不算成功。
     // 🩺 2026-11-05 18:42 事故：这个探针原本只跑一次。页面刚「重建标签后加载成功」
     //    时 UI 还没刷新完，5s 后仍看到「关注」按钮 → clicked-unverified → need-follow，
     //    福袋还剩 6分58秒 却被整轮放弃。现改为同一探针跑两次（只验证、不重复点击），
     //    第二次才成功记 recovered-follow；两次都失败才按真风控交给硬门禁拦截。
+    // 🔴 2026-11-09 二次订正：点击「关注」后抖音会弹「1 钻石加入粉丝团」全屏浮层，
+    //    浮层期间「关注」按钮会从 DOM 移除，旧探针把这种假消失判成 btn-gone 成功。
+    //    实测 main3 11 次 btn-gone 全是浮层假阳性，重载后「关注G」按钮回来、关注数仍 0。
+    //    现在验证前先按 Escape 关浮层（只发按键，不点页面空白处以免误触导航），
+    //    且「按钮消失」必须同时满足「头部出现 +加粉丝团/加会员」才算确定已关注。
+    const dismissFansPanel = async()=>{
+      try{
+        await tab.cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},8000);
+        await tab.cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},8000);
+        await sleep(1200);
+      }catch(e){}
+    };
     const verifyExpr = `(()=>{
       var b=document.body&&document.body.innerText||'';
       var len=b.length;
@@ -665,27 +699,35 @@ async function _ensureFollowImpl(tab, room){
       var head='';
       for(const el of document.querySelectorAll('button,div,span,a')){
         var r=el.getBoundingClientRect();
-        if(r.y>70||r.x>600||r.width<10||r.height<8)continue;
+        if(r.y>75||r.x>640||r.width<10||r.height<8)continue;
         var h=(el.innerText||'').trim();
         if(h&&h.length<=14) head += h.replace(/\\n/g,'') + '|';
       }
-      // 只认头部明确的已关注态，不用全页正则（弹幕/商品卡可能含误导词）
       if(/已关注|互相关注/.test(head)) return {done:true, how:'followed-text', len:len, head:head.slice(0,80)};
+      // 粉丝团浮层还在：此时「关注」按钮的消失是被浮层替换，不能算成功
+      var fansPanel=/钻石加入粉丝团|酷炫勋章|专属礼物|进场特效/.test(b);
+      // 关注按钮：DOM 直查 + 坐标兜底，与 st 探针同口径
       var still=false;
-      for(const el of document.querySelectorAll('button,div,span')){
+      for(const el of document.querySelectorAll('button')){
         var t=(el.innerText||'').trim();
-        if(t!=='关注' && !/^关注\\s*\\n?\\s*G?$/.test(t)) continue;
+        if(!/^关注/.test(t) || t.indexOf('加粉丝团')>=0) continue;
         var r2=el.getBoundingClientRect();
-        if(r2.width>=30 && r2.height>=16 && r2.width<150 && r2.y<130){ still=true; break; }
+        if(r2.width>=30 && r2.height>=16 && r2.width<160 && r2.y<130){ still=true; break; }
       }
-      if(len<200) return {done:false, how:'page-loading', len:len, still:still, head:head.slice(0,80), inconclusive:true};
+      if(len<200) return {done:false, how:'page-loading', len:len, still:still, fansPanel:fansPanel, head:head.slice(0,80), inconclusive:true};
+      if(fansPanel) return {done:false, how:'fans-panel', len:len, still:still, fansPanel:true, head:head.slice(0,80), inconclusive:true};
       if(still) return {done:false, how:'still-there', len:len, still:true, head:head.slice(0,80)};
+      // 🔴 按钮消失还不够：必须头部同时出现已关注态专属组件，才敢确定关注成功
+      var hasFollowedUi=/加粉丝团|加会员|已关注|互相关注/.test(head);
+      if(!hasFollowedUi) return {done:false, how:'btn-gone-unverified', len:len, still:false, head:head.slice(0,80), inconclusive:true};
       return {done:true, how:'btn-gone', len:len, still:false, head:head.slice(0,80)};
     })()`;
+    await dismissFansPanel();
     let v = await ev(tab, verifyExpr, 20000);
     let recoveredOnRetry=false;
     if((!v || !v.done) && VERIFY_RETRY_MS>0 && !v.__err){
       await sleep(VERIFY_RETRY_MS);
+      await dismissFansPanel();   // 二次验证前再关一次浮层，避免残留面板干扰
       const v2 = await ev(tab, verifyExpr, 20000);
       if(v2 && !v2.__err && v2.done){ v=v2; recoveredOnRetry=true; }
       else if(v2 && !v2.__err){ v=v2; }   // 二次仍失败，用最新的 DOM 诊断
