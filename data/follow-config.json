@@ -1,8 +1,8 @@
 {
- "enabled": true,
- "requireFollowBeforeJoin": true,
- "allowInconclusive": true,
- "verifyRetryMs": 4000,
- "retryCooldownMs": 45000,
- "note": "2026-11-05 用户定稿「抢福袋前都需要先关注主播」。关注必须在 tryJoin 打开福袋面板之前做：面板是全屏遮罩，会挡住左上角关注按钮的 elementFromPoint 命中，实测 73 次关注 71 次失败几乎全因此。requireFollowBeforeJoin=true 表示关注成功或已关注才允许抢；allowInconclusive=true 表示页面未加载好的不确定情形仍放行抢，避免加载慢就丢福袋导致系统停摆。关注状态一律以当前页面 DOM 为准，不信全局 followed-rooms.txt，天然按账号正确。2026-11-05 18:42 事故增补：点击关注后只等 5s 验证一次，页面刚重建标签时 UI 还没刷新完会把成功误判成 clicked-unverified，导致 need-follow 丢掉仍在倒计时的福袋。现新增 verifyRetryMs 做二次验证（只验证不重复点击），二次仍失败才按真风控拦截；验证诊断字段写入 exec-actions.jsonl，便于区分「页面没稳」与「请求被静默丢弃」。retryCooldownMs 是参与失败后的短冷却，让还活着的福袋能被重试，不再被 12 分钟去重锁死。"
+  "enabled": true,
+  "requireFollowBeforeJoin": true,
+  "allowInconclusive": false,
+  "verifyRetryMs": 4000,
+  "retryCooldownMs": 45000,
+  "note": "2026-11-05 用户定稿「抢福袋前都需要先关注主播」。关注必须在 tryJoin 打开福袋面板之前做：面板是全屏遮罩，会挡住左上角关注按钮的 elementFromPoint 命中，实测 73 次关注 71 次失败几乎全因此。2026-11-09 用户定稿「硬判据 + 不确定拦截」：allowInconclusive 改为 false。实证 main3 的 /user/self 显示「关注 0」，但旧代码用「头部有加粉丝团 + 无关注按钮 ⇒ 已关注」和「fans-group-state」两条假阳性判据，记了 185 次 ok 却一次都没真点过关注。现只认「关注成功」toast、头部明确「已关注/互相关注」、点击后原关注按钮确实消失三类硬信号；找不到关注按钮或页面未渲染好一律 inconclusive 且不放行抢福袋，宁可少抢也不虚报关注数。关注状态一律以当前页面 DOM 为准，不信全局 followed-rooms.txt，天然按账号正确。verifyRetryMs 做二次验证（只验证不重复点击），retryCooldownMs 是参与失败后的短冷却。"
 }

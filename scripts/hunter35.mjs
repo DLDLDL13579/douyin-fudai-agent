@@ -106,6 +106,25 @@ let _PACKET={detectEnabled:true,grabEnabled:false};
 try{ _PACKET=Object.assign(_PACKET, JSON.parse(fs.readFileSync(DATA_DIR+'/packet-config.json','utf8'))||{}); }catch(e){}
 const PACKET_DETECT=!!_PACKET.detectEnabled;
 const PACKET_GRAB=!!_PACKET.grabEnabled;
+// 💬 守候期间发弹幕活跃账号（2026-11-09 用户定稿「在等待福袋开奖期间可以在直播间随便发送弹幕，活跃账号」）。
+//    单一数据源 data/danmu-config.json，代码只读。这是系统首次「主动公开发送内容」，
+//    因此默认只对主实例开放、带开关、带频率上限、带文案白名单，且全部发送都留痕。
+//    受控单条实测（2026-11-09 10:05）：contenteditable 输入框 + Input.insertText + Enter
+//    可真实发出，编辑器清空、无禁言、开奖检测 found:false 不误判。
+let _DANMU={enabled:false,accounts:['main'],minIntervalSec:60,maxIntervalSec:90,maxPerWait:8,texts:[]};
+try{ _DANMU=Object.assign(_DANMU, JSON.parse(fs.readFileSync(DATA_DIR+'/danmu-config.json','utf8'))||{}); }catch(e){}
+const DANMU_ENABLED=!!_DANMU.enabled;
+// 主实例（不带 --account）在配置里登记为 'main'；账号实例用真实账号名。
+const DANMU_ACCOUNT=ACCOUNT||'main';
+const DANMU_FOR_THIS=Array.isArray(_DANMU.accounts) && _DANMU.accounts.includes(DANMU_ACCOUNT);
+const DANMU_MIN=Math.max(30,Math.min(600,Number(_DANMU.minIntervalSec)||60));
+const DANMU_MAX=Math.max(DANMU_MIN,Math.min(900,Number(_DANMU.maxIntervalSec)||90));
+const DANMU_MAX_PER_WAIT=Math.max(1,Math.min(20,Number(_DANMU.maxPerWait)||8));
+// 文案白名单：过滤空串、过长内容，以及任何可能被开奖检测正则误判的词。
+//    开奖检测判据见守候循环：/恭喜|中奖|获奖|获得.*奖|奖品|未中奖|很遗憾|没抽中|送你一个好运/
+const DANMU_BAD=/恭喜|中奖|获奖|获得.{0,8}(奖|福袋|红包|礼)|奖品|已发放|已放入|背包|未中奖|没有中奖|很遗憾|没抽中|送你一个好运|下次再来|再接再厉/;
+const DANMU_TEXTS=(Array.isArray(_DANMU.texts)?_DANMU.texts:[])
+  .map(s=>String(s||'').trim()).filter(s=>s.length>0&&s.length<=20&&!DANMU_BAD.test(s));
 function getMinOnline(){
   const h=new Date().getHours();
   // 晚间 19:00-24:00 用高门槛，凌晨 0-6 点按白天算（人少但仍在播）
@@ -125,7 +144,9 @@ const POLICY_SNAPSHOT={
   wait:{scale:WS,drawBufferSec:DRAW_BUF,drawMaxSec:DRAW_MAX,drawFallbackSec:DRAW_FALLBACK,postDrawWaitSec:POST_DRAW_MS/1000},
   follow:{enabled:FOLLOW_ENABLED,gate:FOLLOW_GATE,allowInconclusive:FOLLOW_ALLOW_INCONCLUSIVE,
           verifyRetryMs:VERIFY_RETRY_MS,retryCooldownMs:RETRY_COOLDOWN_MS},
-  packet:{detect:PACKET_DETECT,grab:PACKET_GRAB}
+  packet:{detect:PACKET_DETECT,grab:PACKET_GRAB},
+  danmu:{enabled:DANMU_ENABLED,accounts:_DANMU.accounts,minIntervalSec:DANMU_MIN,
+         maxIntervalSec:DANMU_MAX,maxPerWait:DANMU_MAX_PER_WAIT,textCount:DANMU_TEXTS.length}
 };
 // 参数指纹：配置一变 policyId 就变，报告可按它分组对比不同策略期的表现。
 // 用 crypto 稳定哈希，不依赖对象键序。
@@ -300,6 +321,98 @@ const shot=async(t,n)=>{try{const r=await t.cdp.send('Page.captureScreenshot',{f
 const clickXY=async(t,x,y)=>{await t.cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x,y});await sleep(250);
   await t.cdp.send('Input.dispatchMouseEvent',{type:'mousePressed',x,y,button:'left',buttons:1,clickCount:1});await sleep(150);
   await t.cdp.send('Input.dispatchMouseEvent',{type:'mouseReleased',x,y,button:'left',buttons:1,clickCount:1});};
+
+// 💬 守候开奖期间发中性弹幕活跃账号（2026-11-09 用户定稿）。
+//    ⚠ 这是系统首次「主动公开发送内容」，发出不可撤回，因此守卫极严：
+//      ① 只在守候循环内调用；② 配置开关 + 账号白名单；③ 页面必须是直播间、
+//        未掉线、无开奖弹窗；④ 输入框中心点必须真的命中编辑器（未被遮罩挡住）；
+//      ⑤ 只有文本确实进入编辑器才允许发送；⑥ 文案已过滤开奖检测关键词。
+//    2026-11-09 10:05 受控单条实测：Input.insertText + Enter 可真实发出，
+//    编辑器清空、无禁言提示、开奖检测 found:false 不误判。
+async function sendDanmu(tab, room, text){
+  if(!DANMU_ENABLED || !DANMU_FOR_THIS || !DANMU_TEXTS.length) return {sent:false,why:'disabled'};
+  if(DANMU_BAD.test(text) || !text || text.length>20) return {sent:false,why:'bad-text'};
+  try{
+    // 前置守卫：页面状态 + 输入框坐标 + 命中判定，一次求值完成
+    const pre=await ev(tab,`(()=>{
+      var b=document.body&&document.body.innerText||'';
+      var inLive=/live\\.douyin\\.com\\/\\d+/.test(location.href);
+      var needLogin=/需先登录|请先登录|登录后参与|登录后可参与|登录后才能|登录后可/.test(b);
+      var drawPopup=/没抽中|未中奖|恭喜.*(中奖|获得)|中奖通知|送你一个好运|很遗憾/.test(b);
+      var ed=document.querySelector('[contenteditable="true"],textarea');
+      if(!ed) return JSON.stringify({ok:false,why:'no-editor'});
+      var r=ed.getBoundingClientRect();
+      if(r.width<20||r.height<8) return JSON.stringify({ok:false,why:'editor-tiny'});
+      var x=Math.round(r.x+r.width/2), y=Math.round(r.y+r.height/2);
+      var top=null;
+      try{var e=document.elementFromPoint(x,y);top=e?(e.tagName+'.'+String(e.className||'').slice(0,30)):null;}catch(err){}
+      return JSON.stringify({ok:inLive&&!needLogin&&!drawPopup,why:!inLive?'not-live':(needLogin?'need-login':(drawPopup?'draw-popup':'ok')),
+        x:x,y:y,top:top,len:b.length});
+    })()`,15000);
+    if(!pre || pre.__err) return {sent:false,why:'probe-fail'};
+    let g; try{ g=JSON.parse(pre); }catch(e){ return {sent:false,why:'probe-parse'}; }
+    if(!g.ok) return {sent:false,why:g.why};
+    // 输入框中心必须命中编辑器自身，避免点到高层浮层或礼物/商品卡
+    if(!/ace-line|editor|contenteditable|zone-container|INPUT|TEXTAREA/i.test(g.top||''))
+      return {sent:false,why:'editor-covered:'+(g.top||'null')};
+    // 聚焦 → 输入 → 校验文本确实进入编辑器
+    await clickXY(tab, g.x, g.y);
+    await sleep(250);
+    await tab.cdp.send('Input.insertText',{text},10000);
+    await sleep(350);
+    const typed=await ev(tab,`(()=>{
+      var ed=document.querySelector('[contenteditable="true"],textarea');
+      return JSON.stringify({t:ed?(ed.innerText||''):''});
+    })()`,10000);
+    let tv=''; try{ tv=JSON.parse(typed||'{}').t||''; }catch(e){}
+    if(!tv.includes(text)){
+      // 文本没进编辑器：按 Esc 清理，绝不按 Enter（避免误发其它内容）
+      try{
+        await tab.cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},8000);
+        await tab.cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},8000);
+      }catch(e){}
+      return {sent:false,why:'text-not-typed'};
+    }
+    // 发送：优先点「发送」按钮，扫不到就按 Enter（实测抖音无独立发送按钮）
+    const btn=await ev(tab,`(()=>{
+      for(const el of document.querySelectorAll('button,div,span')){
+        var s=(el.innerText||'').trim(); if(s!=='发送'&&s!=='评论')continue;
+        var r=el.getBoundingClientRect(); if(r.width<15||r.width>300)continue;
+        return JSON.stringify({x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)});
+      }
+      return null;
+    })()`,10000);
+    let via='Enter';
+    if(btn){ try{ const bp=JSON.parse(btn); await clickXY(tab,bp.x,bp.y); via='sendBtn'; }catch(e){} }
+    else{
+      await tab.cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},10000);
+      await sleep(80);
+      await tab.cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Enter',code:'Enter',windowsVirtualKeyCode:13,nativeVirtualKeyCode:13},10000);
+    }
+    await sleep(1200);
+    // 发送后校验：编辑器清空视为已发出；禁言/风控提示留痕
+    const post=await ev(tab,`(()=>{
+      var ed=document.querySelector('[contenteditable="true"],textarea');
+      var t=ed?(ed.innerText||'').replace(/\\u200b/g,'').trim():'';
+      var b=document.body&&document.body.innerText||'';
+      return JSON.stringify({cleared:t==='',banned:/禁言|已被限制|发送失败|评论失败|需要登录|请先登录/.test(b)});
+    })()`,10000);
+    let po={}; try{ po=JSON.parse(post||'{}'); }catch(e){}
+    const sent=!!po.cleared;
+    // 留痕：日志 + 执行能力记账（看板只认 fans/follow，danmu 不会污染统计）
+    if(sent){
+      log(`  💬 弹幕已发: ${text} (${via}, 房间 ${room})`);
+      recExec('danmu',true,{room,text,via});
+    }else{
+      log(`  ⚠️ 弹幕未确认发出: ${text} (${via}, 房间 ${room}, banned=${!!po.banned})`);
+      recExec('danmu',false,{room,text,via,banned:!!po.banned});
+    }
+    return {sent,via,banned:!!po.banned};
+  }catch(e){
+    try{ log(`  ⚠️ 弹幕异常跳过: ${String(e.message).slice(0,80)}`); }catch(_){}
+    return {sent:false,why:'exception'};
+  }
+}
 
 async function pSearch(tab,query){
   try{
@@ -484,8 +597,12 @@ async function _ensureFollowImpl(tab, room){
     //      return need-follow 放弃参与，今日 4 个福袋就是这么丢的。
     const st = await ev(tab, `(()=>{
       var followed=false, btn=null, bodyLen=(document.body.innerText||'').length;
-      // ① 服务端视角：已关注态的头部是「+加粉丝团」，且没有独立「关注」按钮。
+      // ① 服务端视角：只认页面「明确写出」已关注态（已关注/互相关注/关注成功 toast）。
       //    只取 y<70 且 x<600 的头部文本，避免把弹幕/商品卡里的「加粉丝团」算进来。
+      //    🔴 2026-11-09 收紧：删除原「头部有加粉丝团 + 无关注按钮 ⇒ 已关注」推断。
+      //    实证 main3 的 /user/self 显示「关注 0」，而 exec-actions.jsonl 里
+      //    185 次被判 already / fans-group-state 记 ok，等于一次都没真点过关注。
+      //    抖音对未关注账号同样显示粉丝团入口，该推断是假阳性根因。
       var head='';
       for(const el of document.querySelectorAll('button,div,span,a')){
         var r=el.getBoundingClientRect();
@@ -493,17 +610,8 @@ async function _ensureFollowImpl(tab, room){
         var h=(el.innerText||'').trim();
         if(h&&h.length<=14) head += h.replace(/\\n/g,'') + '|';
       }
-      if(/已关注|互相关注/.test(head)) followed=true;
-      if(!followed && /加粉丝团/.test(head)){
-        var hasFollowBtn=false;
-        for(const el of document.querySelectorAll('button,div,span')){
-          var t=(el.innerText||'').trim();
-          if(!/^关注\\s*\\n?\\s*G?$/.test(t))continue;
-          var q=el.getBoundingClientRect();
-          if(q.y<130&&q.x<520&&q.width>=30&&q.height>=16){hasFollowBtn=true;break;}
-        }
-        if(!hasFollowBtn) followed=true;
-      }
+      var b=document.body&&document.body.innerText||'';
+      if(/关注成功/.test(b) || /已关注|互相关注/.test(head)) followed=true;
       // ② 扫描左上角找「关注」按钮（未关注态）
       for(var y=15;y<=60;y+=4){
         for(var x=60;x<=430;x+=5){
@@ -525,36 +633,35 @@ async function _ensureFollowImpl(tab, room){
     })()`, 25000);
     if(!st || st.__err) return {ok:false,inconclusive:true,reason:'probe-fail'};
     if(st.followed) return {ok:true,reason:'already'};
-    // ⚠ 无关注按钮时不能直接判「关注失败」：页面可能仍在加载（实测 len=199 时头部
-    //    只有主播名，既无「加粉丝团」也无「关注」按钮，是渲染中间态而非已关注态）。
-    //    这类不确定情形一律 inconclusive，交给 allowInconclusive 放行抢，避免丢福袋。
-    //    判据：头部没有「加粉丝团」（已关注标志）、页面长度 <350、或 head 极短。
+    // 🔴 2026-11-09 收紧（用户定稿「硬判据 + 不确定拦截」）：
+    //    找不到「关注」按钮且页面没有明确「已关注」文字时，一律 inconclusive。
+    //    旧逻辑用「头部有加粉丝团 + 无关注按钮 ⇒ 已关注」推断，实证是假阳性根因：
+    //    main3 的 /user/self 显示「关注 0」，却因这条被判 already / fans-group-state
+    //    记了 185 次 ok，等于一次都没真点过关注。抖音对未关注账号同样显示粉丝团入口。
+    //    现在 inconclusive 不再放行（follow-config.json allowInconclusive:false），
+    //    这类房间会被拦下不抢，直到页面真正渲染出可点的「关注」按钮并点击成功。
     if(!st.btn){
-      const _head=(st.head||'');
-      const _mid = (st.bodyLen||0)<350 || _head.length<20 || !/加粉丝团/.test(_head);
-      if(_mid) return {ok:false,inconclusive:true,reason:'page-partial'};
-      return {ok:false,reason:'no-btn'};
+      return {ok:false,inconclusive:true,reason:'no-follow-btn'};
     }
 
     const b=st.btn;
     await clickXY(tab, b.x, b.y);
     await sleep(5000);   // 关注请求 + UI 刷新需要时间，3.5s 偏短
 
-    // 验证：2026-11-05 干净对照实测，关注成功后左上角变成「+加粉丝团」，
-    //    页面不出现「已关注」文字。四路判定，任一成立即成功：
-    //      ① 「关注成功」toast    ② 「已关注 / 互相关注」文字
-    //      ③ 头部出现「加粉丝团」且无独立关注按钮（真实已关注态）
-    //      ④ 原「关注」按钮消失
-    //    只在页面确实加载好（bodyLen>=200）时才允许判失败，避免加载慢被误判为风控拦截。
+    // 验证（2026-11-09 收紧为硬判据）：只认三类真实信号，任一成立才算成功：
+    //      ① 「关注成功」toast   ② 页面明确出现「已关注 / 互相关注」
+    //      ③ 点击后原「关注」按钮确实消失（btn-gone）
+    //    🔴 删除原「头部出现加粉丝团 + 无关注按钮 ⇒ 成功」分支：
+    //    抖音对未关注账号也显示粉丝团入口，这条让 main3 记了 127 次假 ok。
+    //    页面没加载好（len<200）或按钮仍在时一律不算成功。
     // 🩺 2026-11-05 18:42 事故：这个探针原本只跑一次。页面刚「重建标签后加载成功」
     //    时 UI 还没刷新完，5s 后仍看到「关注」按钮 → clicked-unverified → need-follow，
     //    福袋还剩 6分58秒 却被整轮放弃。现改为同一探针跑两次（只验证、不重复点击），
     //    第二次才成功记 recovered-follow；两次都失败才按真风控交给硬门禁拦截。
     const verifyExpr = `(()=>{
-      var b=document.body.innerText||'';
+      var b=document.body&&document.body.innerText||'';
       var len=b.length;
       if(/关注成功/.test(b)) return {done:true, how:'toast', len:len};
-      if(/已关注|互相关注/.test(b)) return {done:true, how:'followed-text', len:len};
       var head='';
       for(const el of document.querySelectorAll('button,div,span,a')){
         var r=el.getBoundingClientRect();
@@ -562,6 +669,8 @@ async function _ensureFollowImpl(tab, room){
         var h=(el.innerText||'').trim();
         if(h&&h.length<=14) head += h.replace(/\\n/g,'') + '|';
       }
+      // 只认头部明确的已关注态，不用全页正则（弹幕/商品卡可能含误导词）
+      if(/已关注|互相关注/.test(head)) return {done:true, how:'followed-text', len:len, head:head.slice(0,80)};
       var still=false;
       for(const el of document.querySelectorAll('button,div,span')){
         var t=(el.innerText||'').trim();
@@ -569,9 +678,9 @@ async function _ensureFollowImpl(tab, room){
         var r2=el.getBoundingClientRect();
         if(r2.width>=30 && r2.height>=16 && r2.width<150 && r2.y<130){ still=true; break; }
       }
-      if(/加粉丝团/.test(head) && !still) return {done:true, how:'fans-group-state', len:len, still:false, head:head.slice(0,80)};
       if(len<200) return {done:false, how:'page-loading', len:len, still:still, head:head.slice(0,80), inconclusive:true};
-      return {done:!still, how: still?'still-there':'btn-gone', len:len, still:still, head:head.slice(0,80)};
+      if(still) return {done:false, how:'still-there', len:len, still:true, head:head.slice(0,80)};
+      return {done:true, how:'btn-gone', len:len, still:false, head:head.slice(0,80)};
     })()`;
     let v = await ev(tab, verifyExpr, 20000);
     let recoveredOnRetry=false;
@@ -2061,7 +2170,8 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
             //    关注按钮被遮住，elementFromPoint 命中不到 → 历史 73 次关注 71 次失败。
             //    此刻刚识别到福袋、面板还没开、页面干净，实测 3/4 能点上且持久。
             //    门禁由 data/follow-config.json 控制：关注成功或已关注才允许抢；
-            //    页面未加载好（inconclusive）时按 allowInconclusive 放行，避免加载慢就停摆。
+            //    2026-11-09 起 allowInconclusive=false：页面未加载好 / 找不到关注按钮
+            //    的 inconclusive 一律拦截，宁可少抢也不虚报关注数。
             //    关注状态一律看当前页面 DOM，不读全局 followed-rooms.txt（天然按账号正确）。
             let _followPass=true;
             if(FOLLOW_ENABLED){
@@ -2197,7 +2307,21 @@ const chrome=spawn(CHROME,['--headless=new',`--remote-debugging-port=${PORT}`,`-
                 ? Math.min(DRAW_MAX,secLeft+DRAW_BUF) : DRAW_FALLBACK;
               const waitLoops=Math.max(24,Math.ceil(waitSec/5));
               log(`  守候开奖 ${waitLoops*5}s（福袋剩余 ${secLeft}s，冗余 ${DRAW_BUF}s）`);
+              // 💬 弹幕调度：每次守候开奖重新起算，60~90 秒随机抖动，单次最多 maxPerWait 条。
+              //    用「累计等待秒数」判断，不额外引入定时器；弹幕只在开奖检测之前发，
+              //    一旦本轮检出开奖弹窗立即 break，弹幕也就自然停止。
+              let _danmuDue=60+Math.floor(Math.random()*31);
+              let _danmuCount=0;
               for(let i=0;i<waitLoops;i++){
+                // 先发弹幕再检测开奖：文案已过滤开奖关键词，实测不会触发误判
+                const _elapsed=(i+1)*5;
+                if(DANMU_ENABLED && DANMU_FOR_THIS && _danmuCount<DANMU_MAX_PER_WAIT
+                   && _elapsed>=_danmuDue){
+                  const _txt=DANMU_TEXTS[Math.floor(Math.random()*DANMU_TEXTS.length)];
+                  const _d=await sendDanmu(tab,g.room,_txt);
+                  if(_d.sent) _danmuCount++;
+                  _danmuDue=_elapsed+DANMU_MIN+Math.floor(Math.random()*(DANMU_MAX-DANMU_MIN+1));
+                }
                 await sleep(5000);
                 const dr=await ev(tab,`(()=>{
                   // 🎯 开奖结果识别（2026-11-04 第二次修复，根因是几何筛选而非文案）
