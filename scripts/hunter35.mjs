@@ -313,8 +313,34 @@ const HANDLED_TIME=new Map();   // 房间 -> 上次「成功参与」福袋的�
 //    清理由同一 Map 的 size>300 分支负责，不新增第二个状态容器。
 let _RETRY_AT=new Map();        // 房间 -> 本次尝试失败后允许重试的最早时间戳（短冷却，非去重）
 
-class CDP{constructor(ws){this.ws=ws;this.id=0;this.p=new Map();ws.onmessage=(e)=>{const m=JSON.parse(e.data);if(m.id&&this.p.has(m.id)){const q=this.p.get(m.id);this.p.delete(m.id);m.error?q.rej(new Error(JSON.stringify(m.error))):q.res(m.result);}};}
- send(m,p={},t=25000){const id=++this.id;return new Promise((res,rej)=>{const tm=setTimeout(()=>{this.p.delete(id);rej(new Error('timeout'));},t);this.p.set(id,{res:(v)=>{clearTimeout(tm);res(v);},rej:(e)=>{clearTimeout(tm);rej(e);}});this.ws.send(JSON.stringify({id,method:m,params:p}));});}}
+class CDP{
+  constructor(ws){
+    this.ws=ws;this.id=0;this.p=new Map();this.dead=false;this.deadReason='';
+    this._rejectAll=(reason)=>{
+      this.dead=true;this.deadReason=reason;
+      for(const [k,q] of this.p){ try{ q.rej(new Error('ws-dead:'+reason)); }catch(e){} }
+      this.p.clear();
+    };
+    ws.onmessage=(e)=>{const m=JSON.parse(e.data);if(m.id&&this.p.has(m.id)){const q=this.p.get(m.id);this.p.delete(m.id);m.error?q.rej(new Error(JSON.stringify(m.error))):q.res(m.result);}};
+    // 🔴 2026-11-09 20:22 活锁根因：WebSocket 半断开后 ws.send() 不抛错，
+    //    Promise 会一直挂到 25s 超时；守候循环因此每次空等 25s、日志近乎停摆
+    //    （实测主号 20:07:08 后 5 分钟零推进，而外部新 CDP 连接 evaluate 仅 5ms）。
+    //    必须显式监听 close/error 并立刻 reject 所有 pending，让上层能感知并重连。
+    ws.onclose=()=>this._rejectAll('closed');
+    ws.onerror=()=>this._rejectAll('error');
+  }
+  send(m,p={},t=25000){
+    if(this.dead) return Promise.reject(new Error('ws-dead:'+(this.deadReason||'unknown')));
+    const id=++this.id;
+    return new Promise((res,rej)=>{
+      const tm=setTimeout(()=>{this.p.delete(id);rej(new Error('timeout'));},t);
+      this.p.set(id,{res:(v)=>{clearTimeout(tm);res(v);},rej:(e)=>{clearTimeout(tm);rej(e);}});
+      try{ this.ws.send(JSON.stringify({id,method:m,params:p})); }
+      catch(e){ this.p.delete(id); clearTimeout(tm); rej(new Error('ws-send-fail:'+String(e.message).slice(0,60))); }
+    });
+  }
+  get alive(){ return !this.dead && this.ws && this.ws.readyState===1; }
+}
 async function conn(u){const ws=new WebSocket(u);await new Promise((r,j)=>{ws.onopen=r;ws.onerror=j;});return new CDP(ws);}
 const ev=async(t,e,to=25000)=>{try{const r=await t.cdp.send('Runtime.evaluate',{expression:e,returnByValue:true,awaitPromise:true},to);return r.exceptionDetails?{__err:r.exceptionDetails.text}:r.result.value;}catch(e2){return{__err:String(e2.message)}}};
 const shot=async(t,n)=>{try{const r=await t.cdp.send('Page.captureScreenshot',{format:'png'});fs.writeFileSync(W+'/'+n,Buffer.from(r.data,'base64'));}catch{}};
@@ -588,6 +614,18 @@ const SCAN=`(()=>{
 //    ⚠ 真实记账在下方包装函数 ensureFollow 里统一做：原先看板靠日志正则统计，
 //      跨天复用 + 旧探针 no-btn 误判，91 次里大部分是历史噪声。改成 append 到
 //      exec-actions.jsonl，带 at/account，看板按本地日过滤，只认真实到位。
+// 🔴 2026-11-09 22:23 最终定论（此前 19:30 / 19:45 两轮修法均已实测无效并撤回）：
+//    「main3 关注不落库」是服务端会话级限制，不是判据、不是浮层、不是点击方式问题。
+//    决定性同房间对照（471576972164，同一网页同一脚本点击）：
+//      主号 9750  关注数 163 → 164 ✅ 真落库
+//      main3 9752 关注数   2 →   2 ❌ 不落库
+//    两者 relation/update 响应完全相同（status_code:0 / follow_status:1），
+//    页面也都短暂变「+加粉丝团」——UI 成功但服务端不写，属该账号网页会话受限。
+//    用户手机 App 手动可关注，说明账号本身正常，仅网页会话受限，需重扫码才可能恢复。
+//    ❌ 已撤回的错误修法：遇 fans-panel 就 reload 重判（实测 6 次触发 0 次挽回；
+//       因服务端不落库，reload 后「关注G」必然回来，再判仍是未关注，纯属无效重载）。
+//    ✅ 维持 16:29 的严格硬门禁：浮层态一律判 inconclusive 拦截，绝不虚报关注成功。
+//       宁可漏抢，也不在未确定关注的情况下参与——这是用户定稿的 allowInconclusive:false。
 async function _ensureFollowImpl(tab, room){
   try{
     // 🔑 关注按钮定位：button DOM 直查优先，elementFromPoint 坐标扫描兜底。
@@ -655,6 +693,10 @@ async function _ensureFollowImpl(tab, room){
     //    加「等待复探让它消失」，方向错误且无效（c35cd68），已回滚。
     //    真判据必须落在 reload 后的持久态，见文末 16:29 章节；此处保持严格硬门禁不放松。
     if(st.fansPanel && !st.btn){
+      // 🔴 2026-11-09 22:23 撤回 reload 方案：实测 6 次触发 0 次挽回。
+      //    根因是 main3 会话的写操作被服务端限制（同房间对照：主号 163→164 成功、
+      //    main3 2→2 不落库），reload 后关注按钮必然回来，再判仍是未关注。
+      //    浮层期间维持原严格拦截，不改判据、不虚报成功。
       return {ok:false,inconclusive:true,reason:'fans-panel',
         diag:{verifyHow:'fans-panel',bodyLen:st.bodyLen,head:st.head}};
     }
@@ -2375,7 +2417,7 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
                   _danmuDue=_elapsed+DANMU_MIN+Math.floor(Math.random()*(DANMU_MAX-DANMU_MIN+1));
                 }
                 await sleep(5000);
-                const dr=await ev(tab,`(()=>{
+                let dr=await ev(tab,`(()=>{
                   // 🎯 开奖结果识别（2026-11-04 第二次修复，根因是几何筛选而非文案）
                   //    实测截图：抖音开奖弹窗是「全屏遮罩 fixed（宽约 1120）+ 内部 static 白框」，
                   //    旧实现只扫 position:fixed/absolute 的 div 且要求 width<=950，
@@ -2407,6 +2449,21 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
                   }
                   return {found:false};
                 })()`,25000);
+                // 🔴 2026-11-09 20:22 活锁自愈：CDP WebSocket 半断开时 ev 会一路超时，
+                //    守候循环看似在跑实则零推进（实测主号 5 分钟无日志）。
+                //    检测到连接已死就重连当前 tab 并立刻重试本次检测，不再空等到超时。
+                if(dr && dr.__err && /ws-dead|ws-send-fail/.test(String(dr.__err))){
+                  try{
+                    log(`  🔌 开奖检测连接已断(${String(dr.__err).slice(0,40)})，重连中…`);
+                    const pages=await (await fetch(`http://127.0.0.1:${PORT}/json/list`)).json();
+                    const pg=pages.find(x=>x.type==='page'&&/live\.douyin\.com/.test(x.url||''));
+                    if(pg && pg.webSocketDebuggerUrl){
+                      tab.cdp=await conn(pg.webSocketDebuggerUrl);
+                      log(`  ✅ 已重连 CDP，继续守候`);
+                      dr=await ev(tab,`(()=>{var b=document.body&&document.body.innerText||'';return {found:false,len:b.length}})()`,15000);
+                    }
+                  }catch(e){ log(`  ⚠️ 重连失败: ${String(e.message).slice(0,60)}`); }
+                }
                 // 表达式本身报错时必须留痕，否则又是「静默漏判 39 次」那种黑盒
                 if(dr && dr.__err && i%12===0) log(`  ⚠️ 开奖检测表达式异常: ${String(dr.__err).slice(0,120)}`);
                 if(dr && dr.found){

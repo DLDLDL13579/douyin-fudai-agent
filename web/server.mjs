@@ -69,11 +69,21 @@ const IS_WIN = process.platform === 'win32';
 function procInfo() {
   // Windows 没有 `ps`/`grep`：用 tasklist 拿 node.exe 进程，标注为 default。
   // 拿不到就返回空数组，看板会显示「未检测到抓取进程」而不是整个 API 500。
+  // 🔴 2026-11-09 20:15：本机 TCC 限制后 `ps` 变成 `Operation not permitted`，
+  //    `|| true` 把错误吞成空字符串 → procInfo 返回 [] → 看板把两个明明在跑的
+  //    实例标成「已停止」，而抓取与端口都正常。加 pgrep 兜底（本环境实测可用）。
   try {
     const cmd = IS_WIN
       ? 'tasklist /FI "IMAGENAME eq node.exe" /FO CSV /NH'
-      : "ps -eo pid,etime,args | grep -F 'node hunter35.mjs' | grep -v grep || true";
-    const out = execSync(cmd, { encoding: 'utf8', timeout: 5000 }).trim();
+      : "ps -eo pid,etime,args | grep -F 'node hunter35.mjs' | grep -v grep 2>/dev/null || true";
+    let out = execSync(cmd, { encoding: 'utf8', timeout: 5000 }).trim();
+    if (!out && !IS_WIN) {
+      // ps 被系统拒绝或返回空：改用 pgrep，输出格式 "PID args"
+      try {
+        out = execSync("pgrep -fl 'node hunter35.mjs' 2>/dev/null || true",
+          { encoding: 'utf8', timeout: 5000 }).trim();
+      } catch { out = ''; }
+    }
     if (!out) return [];
     if (IS_WIN) {
       return out.split('\n').filter((l) => /"node\.exe"/i.test(l)).map((l) => {
@@ -83,7 +93,10 @@ function procInfo() {
     }
     return out.split('\n').map((l) => {
       const parts = l.trim().split(/\s+/);
-      const pid = parts[0], etime = parts[1];
+      // ps 输出首列 PID、次列 etime；pgrep -fl 首列 PID 后直接是 args
+      const isPs = /^\d+\s+\S+:\S+/.test(l.trim()) || /^\d+\s+\d+-\d+:/.test(l.trim());
+      const pid = parts[0];
+      const etime = isPs ? parts[1] : '-';
       const accMatch = l.match(/--account\s+(\S+)/);
       return { pid, uptime: etime, account: accMatch ? accMatch[1] : 'default' };
     });
@@ -95,10 +108,21 @@ function chromePorts() {
     // ⚠ 必须限定本项目的调试端口范围：主实例 9750，账号实例 9751-9769。
     //   不加范围会把外部 Chrome 也算进来——实测验证看板布局时临时起的截图
     //   Chrome（9770）被误算成系统端口，顶部徽章凭空显示「9750,9770」。
-    const out = IS_WIN
+    // 🔴 2026-11-09 20:23：`ps` 在本机已成 `Operation not permitted`，
+    //    `|| true` 吞成空串 → ports=[] → 顶部徽章显示「端口 无」。
+    //    改为优先 ps，无结果时用 lsof 直接探测 9750-9769 监听端口。
+    let out = IS_WIN
       ? ''   // Windows 没有 ps；端口徽章留空，不影响看板主体
-      : execSync("ps -eo args | grep -F 'remote-debugging-port=' | grep -v grep || true").toString();
-    return [...out.matchAll(/remote-debugging-port=(\d+)/g)].map((m) => Number(m[1]))
+      : execSync("ps -eo args | grep -F 'remote-debugging-port=' | grep -v grep 2>/dev/null || true").toString();
+    let ports = [...out.matchAll(/remote-debugging-port=(\d+)/g)].map((m) => Number(m[1]));
+    if (!ports.length && !IS_WIN) {
+      try {
+        const lw = execSync('lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null || true',
+          { encoding: 'utf8', timeout: 6000 });
+        ports = [...lw.matchAll(/:(\d{4})\s+\(LISTEN\)/g)].map((m) => Number(m[1]));
+      } catch {}
+    }
+    return ports
       .filter((v) => v >= 9750 && v <= 9769)
       .filter((v, i, a) => a.indexOf(v) === i).sort();
   } catch { return []; }
