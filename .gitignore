@@ -60,3 +60,8 @@ nohup.out
 # ── IDE / 编辑器 ────────────────────────────────────────────
 .idea/
 .vscode/
+
+# 2026-11-11 02:19 运行时数据，含账号昵称/关注名单，不进 git
+data/following-cache.json
+data/notify-queue.jsonl
+data/cond1-captures/

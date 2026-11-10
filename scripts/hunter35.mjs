@@ -545,6 +545,40 @@ async function pSearchFans(tab){
 //      查询失败 → 维持原拦截（宁少抢不虚报）。
 //    性能：整表缓存 10 分钟，命中/未命中都缓存，避免每个福袋都翻页。
 let _followingCache = { at:0, set:null, uid:'' };
+// 🔑 2026-11-11 02:18 本地关注列表缓存（解决 uid 提取失败的兜底）
+//    实测：fans-panel 触发 8 次关注校验全部失败，日志显示「uid 提取结果: 空」。
+//    根因：部分房间 performance 里的 webcast 请求不含 to_user_id，
+//    HTML/RENDER_DATA/详情接口也拿不到（详情接口返回 status_code 10011 房间失效）。
+//    但我们已经能把关注列表完整拉到本地（主号 300 人、main3 14 人），
+//    所以改用「主播名」匹配：head 里和日志里都有主播昵称，直接查本地名单。
+let _localFollow = null;   // { main:Set<name>, main3:Set<name> }
+function loadLocalFollow(){
+  if(_localFollow) return _localFollow;
+  try{
+    const raw = JSON.parse(fs.readFileSync(DATA_DIR+'/following-cache.json','utf8'))||{};
+    const m = {};
+    for(const [acc,v] of Object.entries(raw)){
+      if(v && Array.isArray(v.list)) m[acc] = new Set(v.list.map(x=>String(x.name||'').trim()).filter(Boolean));
+    }
+    _localFollow = m;
+    for(const [acc,st] of Object.entries(m)) log(`  📋 本地关注缓存已加载: ${acc} ${st.size} 人`);
+    return m;
+  }catch(e){ _localFollow = {}; return _localFollow; }
+}
+/** 用主播名查本地关注名单。命中返回 true，未命中/无数据返回 false */
+function isFollowedByName(room){
+  try{
+    const cache = loadLocalFollow();
+    const set = cache[ACCOUNT_TAG] || cache[ACCOUNT_TAG==='main'?'main':ACCOUNT_TAG];
+    if(!set || !set.size) return false;
+    const name = String(NAMES[room]||'').trim();
+    if(!name) return false;
+    if(set.has(name)) return true;
+    // 宽松匹配：包含关系（昵称可能带后缀如「甜奈¹¹⁰⁵」）
+    for(const n of set){ if(n && (name.includes(n)||n.includes(name))) return true; }
+    return false;
+  }catch(e){ return false; }
+}
 const FOLLOW_CACHE_MS = 10*60*1000;
 async function fetchFollowingSet(tab){
   const now = Date.now();
@@ -900,6 +934,17 @@ async function _ensureFollowImpl(tab, room){
             if(_set && !_set.has(String(_auid))){
               log(`  🔑 关注列表校验：主播 ${_auid} 未关注，保持拦截`);
             }
+          }
+          // 🔑 2026-11-11 02:18 第三路兜底：uid 拿不到时用主播名查本地关注名单。
+          //    实测 8 次校验全因 uid 空而失败，本地名单能补上这个缺口。
+          if(!_auid){
+            const _byName = isFollowedByName(room);
+            if(_byName){
+              log(`  🔑 本地名单命中：${NAMES[room]||room} 已关注，放行`);
+              return {ok:true, reason:'already-by-name',
+                diag:{verifyHow:'already-by-name',room,bodyLen:st.bodyLen,head:st.head}};
+            }
+            log(`  🔑 uid 空且本地名单未命中：${NAMES[room]||room}，保持拦截`);
           }
         }catch(e){ log(`  ⚠️ 关注校验异常: ${String(e.message||e).slice(0,100)}`); }
       }
