@@ -289,12 +289,21 @@ else
 fi
 
 # 趋势提示
+# 🔴 2026-11-11 03:16 修：样本量差异大时百分比对比会严重误导。
+#    实测案例：更早只有 2 次（全中=100%），近3小时 20 次（55%），
+#    直接相减得出「-45 个百分点」毫无意义。两边各需 >=10 次才给对比。
 RECENT=$(echo "$L1" | awk '/^P recent/{print $4}')
+RECENT_N=$(echo "$L1" | awk '/^P recent/{print $3}')
 OLDER=$(echo "$L1" | awk '/^P older/{print $4}')
+OLDER_N=$(echo "$L1" | awk '/^P older/{print $3}')
 if [ -n "${RECENT:-}" ] && [ -n "${OLDER:-}" ]; then
-  DIFF=$(echo "$RECENT $OLDER" | awk '{printf "%.1f", $1-$2}')
-  SIGN=$(echo "$DIFF" | awk '{print ($1>0)?"+":""}')
-  say "  趋势：近3小时 ${RECENT}% vs 更早 ${OLDER}%（${SIGN}${DIFF} 个百分点）"
+  if [ "${RECENT_N:-0}" -ge 10 ] && [ "${OLDER_N:-0}" -ge 10 ]; then
+    DIFF=$(echo "$RECENT $OLDER" | awk '{printf "%.1f", $1-$2}')
+    SIGN=$(echo "$DIFF" | awk '{print ($1>0)?"+":""}')
+    say "  趋势：近3小时 ${RECENT}%（${RECENT_N}次） vs 更早 ${OLDER}%（${OLDER_N}次）｜${SIGN}${DIFF} 个百分点"
+  else
+    say "  趋势：近3小时 ${RECENT}%（${RECENT_N:-0}次） vs 更早 ${OLDER}%（${OLDER_N:-0}次）｜样本不足10次，不做对比"
+  fi
 fi
 
 echo
