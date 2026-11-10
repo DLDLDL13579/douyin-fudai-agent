@@ -584,12 +584,18 @@ async function getAnchorUid(tab){
     const r = await ev(tab, `(async function(){
       try{
         // ① performance 资源项
-        var es=performance.getEntriesByType('resource')||[];
-        for(var i=es.length-1;i>=0;i--){
-          var u=es[i].name||'';
-          if(u.indexOf('webcast')<0) continue;
-          var m=u.match(/to_user_id=(\d+)/)||u.match(/anchor_id=(\d+)/);
-          if(m) return JSON.stringify({uid:m[1],via:'perf'});
+        // ⚠ 2026-11-10 17:18 修时机：ensureFollow 常在刚进房时就调用，
+        //    此时 webcast 请求可能还没发出，performance 里查不到 → uid 空 → 校验失效。
+        //    先等最多 6 秒让资源出现，再放弃转下一路。
+        for(var _w=0;_w<12;_w++){
+          var es=performance.getEntriesByType('resource')||[];
+          for(var i=es.length-1;i>=0;i--){
+            var u=es[i].name||'';
+            if(u.indexOf('webcast')<0) continue;
+            var m=u.match(/to_user_id=(\d+)/)||u.match(/anchor_id=(\d+)/);
+            if(m) return JSON.stringify({uid:m[1],via:'perf'});
+          }
+          await new Promise(function(r){setTimeout(r,500)});
         }
         // ② 页面 HTML 内联数据
         var html=document.documentElement.innerHTML;
@@ -880,8 +886,10 @@ async function _ensureFollowImpl(tab, room){
       //    解法：查服务端关注列表（权威），命中就放行，未命中/查询失败保持原拦截。
       //    只在 head 已含粉丝团入口时才查，避免无谓开销。
       if(/加粉丝团|加会员/.test(st.head)){
+        log('  🔑 进入关注列表校验…');
         try{
           const _auid = await getAnchorUid(tab);
+          log(`  🔑 uid 提取结果: ${_auid||'空'}`);
           if(_auid){
             const _set = await fetchFollowingSet(tab);
             if(_set && _set.has(String(_auid))){
@@ -893,7 +901,7 @@ async function _ensureFollowImpl(tab, room){
               log(`  🔑 关注列表校验：主播 ${_auid} 未关注，保持拦截`);
             }
           }
-        }catch(e){ /* 校验异常 → 走原拦截，不影响主流程 */ }
+        }catch(e){ log(`  ⚠️ 关注校验异常: ${String(e.message||e).slice(0,100)}`); }
       }
       return {ok:false,inconclusive:true,reason:'fans-panel',
         diag:{verifyHow:'fans-panel',bodyLen:st.bodyLen,head:st.head}};
@@ -1376,6 +1384,18 @@ async function tryJoin(tab,f,url,online){
       //    旧逻辑 fr.ok=false 就直接 return need-follow 放弃，今日 4 个福袋因此丢失。
       //    修法与粉丝团分支一致：验证失败 ≠ 参与失败，不论如何都重扫参与按钮。
       const room=url.split('/').pop();
+      // 🔴 2026-11-10 17:49 用户批评参与率后，用 cond1 快照定位到真因：
+      //    快照实证面板打开后「一键发评论参与福袋」按钮明明存在
+      //    （@393,448 335x44 class=QOARtY3v），但代码走到 cond1 分支后搜不到。
+      //    根因：cond1 分支先调 ensureFollow，而它会尝试点击关注按钮、可能把面板顶掉。
+      //    改为「先搜按钮，搜不到才关注」——面板在的时候按钮就在，没必要先关注。
+      const b0=await pSearchJoin(tab);
+      if(b0.cnt>0){
+        btn=b0;
+        out.steps.push('cond-pre-btn'+(b0.via?'('+b0.via+')':''));
+        break;
+      }
+      out.steps.push('cond-pre-miss:'+String((b0.tried||[]).length));
       const fr=await ensureFollow(tab, room);
       out.steps.push('cond-follow:'+(fr.ok?'ok('+fr.reason+')':'fail('+fr.reason+')'));
       await sleep(2500);
