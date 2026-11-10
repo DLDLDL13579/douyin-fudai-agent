@@ -119,67 +119,28 @@ say "  L0 结论：$([ "$L0BAD" -eq 0 ] && echo '服务全部正常' || echo "$L
 # ────────────────────────────────────────────────────────────
 echo
 say "【L1 产出层 · 到底抢到没有】"
-L1=$(node -e '
-const fs=require("fs");
-let L=[];
-try{
-  L=fs.readFileSync("data/participations.jsonl","utf8").trim().split("\n")
-    .map(x=>{try{return JSON.parse(x)}catch(e){return null}}).filter(Boolean);
-}catch(e){}
-const now=new Date();
-const isToday=(iso)=>{const t=new Date(iso);
-  return t.getFullYear()===now.getFullYear()&&t.getMonth()===now.getMonth()&&t.getDate()===now.getDate()};
-const today=L.filter(r=>isToday(r.at));
-const n=today.length;
-if(!n){console.log("NODATA");process.exit(0)}
-const c={};
-today.forEach(r=>{c[r.result||"?"]=(c[r.result||"?"]||0)+1});
-const joined=(c["joined"]||0)+(c["maybe-joined"]||0);
-const order=Object.entries(c).sort((a,b)=>b[1]-a[1]);
-console.log("TOTAL "+n+" JOINED "+joined+" RATE "+(joined/n*100).toFixed(1));
-order.forEach(([k,v])=>console.log("R "+k+" "+v+" "+(v/n*100).toFixed(1)));
-// 分账号
-const acc={};
-today.forEach(r=>{const a=r.account||"?";acc[a]=acc[a]||{n:0,j:0};acc[a].n++;if(r.result==="joined"||r.result==="maybe-joined")acc[a].j++});
-Object.entries(acc).forEach(([a,v])=>console.log("A "+a+" "+v.n+" "+v.j+" "+(v.j/v.n*100).toFixed(1)));
-// 分时段（近3小时 vs 更早）——按真实时间戳算，不用整点窗口
-// ⚠ 2026-11-10 19:08 修正：原用 getHours()>=h-2 会让 19:08 时的窗口变成 17~19 点，
-//   只覆盖约 2 小时；且整点边界会把 16:59 的记录算进「更早」。改用 Date.now()-3h。
-const _cut=Date.now()-3*3600*1000;
-const recent=today.filter(r=>new Date(r.at).getTime()>=_cut);
-const older=today.filter(r=>new Date(r.at).getTime()<_cut);
-if(recent.length)console.log("P recent "+recent.length+" "+(recent.filter(r=>r.result==="joined"||r.result==="maybe-joined").length/recent.length*100).toFixed(1));
-if(older.length)console.log("P older "+older.length+" "+(older.filter(r=>r.result==="joined"||r.result==="maybe-joined").length/older.length*100).toFixed(1));
-// 亏损类别明细
-["need-follow","no-panel","fans-skip-daytime","fans-skip-account","fans-unverified","fans-no-coins","packet-skipped"].forEach(k=>{
-  if(c[k])console.log("LOSS "+k+" "+c[k]);
-});
-// wins
-try{
-  const w=fs.readFileSync("data/wins.jsonl","utf8").trim().split("\n").filter(Boolean);
-  const wt=w.map(x=>{try{return JSON.parse(x)}catch(e){return null}}).filter(Boolean).filter(r=>isToday(r.at));
-  console.log("WINS "+wt.length);
-}catch(e){console.log("WINS 0")}
-' 2>/dev/null)
+L1=$(node "$ROOT/scripts/stats-today.mjs" 2>/dev/null)
 
 if echo "$L1" | grep -q NODATA; then
   say "  今日尚无参与记录"
 else
+  # 新输出格式（scripts/stats-today.mjs）：TOTAL <n> / JOINED <n> / RATE <n>
   TOT=$(echo "$L1" | awk '/^TOTAL/{print $2}')
-  JN=$(echo "$L1"  | awk '/^TOTAL/{print $4}')
-  RT=$(echo "$L1"  | awk '/^TOTAL/{print $6}')
-  # 🔴 2026-11-11 00:46 口径统一：巡检原始数与看板 dedup 后数字会不同
-  #    （实测原始 8 条 vs 看板 4 条）。用户看看板，巡检必须同口径。
+  JN=$(echo "$L1"  | awk '/^JOINED/{print $2}')
+  RT=$(echo "$L1"  | awk '/^RATE/{print $2}')
+  # 🔴 2026-11-11 01:18：L1 已由 scripts/stats-today.mjs 计算并自带 dedup，
+  #    与看板 web/server.mjs 的 dedupRows 同算法（房间+账号+12分钟滑动窗口），
+  #    所以这里不再需要拉 API 覆盖，只做一次交叉校验确认两边一致。
   API_T=$(curl -s -m 6 http://127.0.0.1:8899/api/status 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log((j.stats?.todayTotal||0)+" "+(j.stats?.todayJoined||0))}catch(e){console.log("0 0")}})' 2>/dev/null)
   read -r API_TOTAL API_JOINED <<< "${API_T:-0 0}"
   if [ "${API_TOTAL:-0}" != "0" ] && [ "${TOT:-0}" != "${API_TOTAL}" ]; then
-    say "  ⚠️ 口径：巡检原始 ${TOT} 条 → 看板去重后 ${API_TOTAL} 条（同房间同账号12分钟内去重）"
+    say "  ⚠️ 口径不一致：巡检 ${TOT} vs 看板 ${API_TOTAL}（应相同，请查 dedup 实现）"
     TOT=$API_TOTAL; JN=$API_JOINED
     [ "${TOT:-0}" -gt 0 ] && RT=$(awk -v a="$JN" -v b="$TOT" 'BEGIN{printf "%.1f", a/b*100}')
   fi
   say "  今日遭遇 ${TOT} · 参与成功 ${JN} · 参与率 ${RT}%"
   say "  结果分布："
-  echo "$L1" | awk '/^R /{printf "    %-22s %4s  %s%%\n", $2, $3, $4}'
+  echo "$L1" | awk '/^R /{pct=($3>0 && TOT>0)?sprintf("%.1f",$3/TOT*100):"0.0"; printf "    %-22s %4s  %s%%\n", $2, $3, pct}' TOT="${TOT:-0}"
   say "  分账号："
   echo "$L1" | awk '/^A /{printf "    %-8s %4s次 %4s中  %s%%\n", $2, $3, $4, $5}'
   say "  分时段："
