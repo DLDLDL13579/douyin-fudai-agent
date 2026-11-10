@@ -104,6 +104,11 @@ while true; do
     log "DRY 模式只跑一轮，退出"
     exit 0
   fi
-  sleep "$INTERVAL" &
-  wait $!
+  # 🔴 2026-11-11 05:17 修：原写法 `sleep "$INTERVAL" &` + `wait $!` 会挂死。
+  #    实测进程存活 18 小时 43 分（应跑 37 轮），但日志只有 2 条，
+  #    磁盘上的过期截图积压到 10 张没清（main3 4 张 + douyin-auto 6 张）。
+  #    根因：后台 sleep + wait 在 bash 非交互模式下，若期间收到 SIGCHLD
+  #    或其他信号，wait 可能永远不返回，循环就停在那里。
+  #    sleep 本身在前台就会阻塞指定秒数，完全不需要 & 和 wait。
+  sleep "$INTERVAL"
 done
