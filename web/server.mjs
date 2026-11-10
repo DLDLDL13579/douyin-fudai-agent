@@ -498,9 +498,14 @@ function buildStatus() {
         return m[k];
       };
       // 先给所有已注册账号占位：meta.json 里是 main / main2，数据里主号叫 default
-      for (const a of accs) ensure(a.name === 'main' ? 'default' : a.name);
+      // 🔴 2026-11-10 10:53：主号归一化。历史约定「数据里主号叫 default」，
+      //    但改用 `--account main` 启动后写入的是 `main`，而占位用 `default`，
+      //    导致 byAccount 出现 main=5 与 default=0 两行同一账号。
+      //    改为双向归一：main 与 default 视为同一账号，统一用 `default` 作为 key。
+      const normAcc = (k) => (!k || k === 'main') ? 'default' : k;
+      for (const a of accs) ensure(normAcc(a.name));
       for (const r of todayRows) {
-        const e = ensure(r.account || 'default');
+        const e = ensure(normAcc(r.account));
         e.total++;
         if (r.result === 'joined' || r.result === 'maybe-joined') e.joined++;
       }
