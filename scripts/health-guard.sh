@@ -273,6 +273,23 @@ run_once(){
   disk_gb=$(df -g "$ROOT" 2>/dev/null | awk 'NR==2{print $4}')
   [ "${disk_gb:-99}" -lt "$DISK_WARN_GB" ] && alert G "磁盘可用 ${disk_gb}Gi 低于 ${DISK_WARN_GB}Gi"
 
+  # ── I2 定期刷新本地关注名单（每 6 小时）────────────────────────────
+  # 🔴 2026-11-11 07:17：hunter35 的 fans-panel 校验依赖 data/following-cache.json，
+  #    实测 5 小时后主号关注数从 181 涨到 190，新增的未进缓存，会导致
+  #    「uid 拿不到 + 本地名单未命中」时误拦已关注的房间。
+  #    刷新本身要开 CDP 页面，开销不小，6 小时一次足够（关注变化不频繁）。
+  local _fc="$ROOT/data/following-cache.json"
+  local _fc_age=999999
+  if [ -f "$_fc" ]; then
+    _fc_age=$(( $(date +%s) - $(stat -f '%m' "$_fc") ))
+  fi
+  if [ "$_fc_age" -gt 21600 ]; then
+    say "🔄 关注名单缓存已 ${_fc_age}s 未更新，开始刷新"
+    local _rres
+    _rres=$(node "$ROOT/scripts/refresh-following.mjs" 2>&1 | tail -3)
+    say "  刷新结果：${_rres//$'\n'/ | }"
+  fi
+
   # ── H 中奖告警 ──────────────────────────────────────────────────────
   if [ -f "$DATA/wins.jsonl" ]; then
     local wn
