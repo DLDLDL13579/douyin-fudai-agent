@@ -534,6 +534,61 @@ async function pSearchFans(tab){
   }
   return {cnt:0, ids:[], via:null, tried};
 }
+
+// 🔑 2026-11-10 16:38 关注列表权威校验（用户批评「参与率太低，巡检没发现」后新增）：
+//    实证：今日主号 9 次 fans-panel 拦截，涉及 5 个主播（张森财经/萝卜/觅渡Dzg/贪吃小欣/小屿），
+//    用 /following/list 查证**全部在主号 173 个关注里**——是「已关注被误判」，白丢 9 个福袋。
+//    但 16:29 事故证明「未关注用户在浮层期，头部也是+加粉丝团」，单看 DOM 无法区分。
+//    解法：不去猜 DOM，直接查服务端关注列表（权威数据）。
+//      命中 → 确实已关注，放行；
+//      未命中 → 保持原严格拦截（不虚报）；
+//      查询失败 → 维持原拦截（宁少抢不虚报）。
+//    性能：整表缓存 10 分钟，命中/未命中都缓存，避免每个福袋都翻页。
+let _followingCache = { at:0, set:null, uid:'' };
+const FOLLOW_CACHE_MS = 10*60*1000;
+async function fetchFollowingSet(tab){
+  const now = Date.now();
+  if(_followingCache.set && (now-_followingCache.at) < FOLLOW_CACHE_MS) return _followingCache.set;
+  try{
+    const r = await ev(tab, `(async()=>{try{
+      var j=JSON.parse(await (await fetch('/aweme/v1/web/user/profile/self/?device_platform=webapp&aid=6383&_t='+Date.now(),{credentials:'include',cache:'no-store'})).text());
+      var u=j.user||{}; if(!u.uid) return JSON.stringify({err:'no-uid'});
+      var all=[],off=0,more=true,p=0;
+      while(more&&p<15){
+        var k=JSON.parse(await (await fetch('/aweme/v1/web/user/following/list/?user_id='+u.uid+'&sec_user_id='+u.sec_uid+'&count=20&offset='+off+'&aid=6383&device_platform=webapp&_t='+Date.now(),{credentials:'include',cache:'no-store'})).text());
+        var arr=k.followings||[];
+        all=all.concat(arr.map(function(x){return String(x.uid)}));
+        more=!!k.has_more; off+=20; p++; if(!arr.length)break;
+      }
+      return JSON.stringify({uid:u.uid,cnt:u.following_count,list:all});
+    }catch(e){return JSON.stringify({err:String(e.message).slice(0,80)})}})()`, 30000);
+    const j = JSON.parse(r || '{}');
+    if(j.err || !Array.isArray(j.list)) return null;
+    _followingCache = { at: now, set: new Set(j.list.map(String)), uid: String(j.uid||'') };
+    log(`  🔑 关注列表已缓存：${j.cnt} 人（拉到 ${j.list.length} 个）`);
+    return _followingCache.set;
+  }catch(e){ return null; }
+}
+
+// 从当前直播间的网络请求里抓主播 uid（实测稳定可拿）
+// 用 Performance API 读已发生的 webcast 请求，无需额外监听
+async function getAnchorUid(tab){
+  try{
+    const r = await ev(tab, `(function(){
+      try{
+        var es=performance.getEntriesByType('resource')||[];
+        for(var i=es.length-1;i>=0;i--){
+          var u=es[i].name||'';
+          if(u.indexOf('webcast')<0) continue;
+          var m=u.match(/to_user_id=(\d+)/)||u.match(/anchor_id=(\d+)/);
+          if(m) return m[1];
+        }
+      }catch(e){}
+      return '';
+    })()`, 12000);
+    return String(r||'');
+  }catch(e){ return ''; }
+}
 async function ensureDom(tab){try{await tab.cdp.send('DOM.enable',{},15000);const d=await tab.cdp.send('DOM.getDocument',{depth:-1,pierce:true},30000);return d?.root?.nodeId||null;}catch(e){return null;}}
 async function getBox(tab,nodeId){
   try{
@@ -781,6 +836,29 @@ async function _ensureFollowImpl(tab, room){
       //    根因是 main3 会话的写操作被服务端限制（同房间对照：主号 163→164 成功、
       //    main3 2→2 不落库），reload 后关注按钮必然回来，再判仍是未关注。
       //    浮层期间维持原严格拦截，不改判据、不虚报成功。
+      //
+      // 🔑 2026-11-10 16:38 增补「关注列表权威校验」（用户批评参与率太低后新增）：
+      //    实证：今日主号 9 次 fans-panel 拦截涉及 5 个主播，用 /following/list 查证
+      //    **全部已在主号 173 个关注里** —— 纯粹是已关注被误判，白丢 9 个福袋。
+      //    而 16:29 事故证明「未关注用户在浮层期头部也是 +加粉丝团」，单看 DOM 无法区分。
+      //    解法：查服务端关注列表（权威），命中就放行，未命中/查询失败保持原拦截。
+      //    只在 head 已含粉丝团入口时才查，避免无谓开销。
+      if(/加粉丝团|加会员/.test(st.head)){
+        try{
+          const _auid = await getAnchorUid(tab);
+          if(_auid){
+            const _set = await fetchFollowingSet(tab);
+            if(_set && _set.has(String(_auid))){
+              log(`  🔑 关注列表校验：主播 ${_auid} 已关注，放行（服务端权威）`);
+              return {ok:true, reason:'already-verified',
+                diag:{verifyHow:'already-verified',anchorUid:_auid,bodyLen:st.bodyLen,head:st.head}};
+            }
+            if(_set && !_set.has(String(_auid))){
+              log(`  🔑 关注列表校验：主播 ${_auid} 未关注，保持拦截`);
+            }
+          }
+        }catch(e){ /* 校验异常 → 走原拦截，不影响主流程 */ }
+      }
       return {ok:false,inconclusive:true,reason:'fans-panel',
         diag:{verifyHow:'fans-panel',bodyLen:st.bodyLen,head:st.head}};
     }
