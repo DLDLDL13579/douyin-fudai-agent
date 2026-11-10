@@ -53,7 +53,14 @@ cnt(){
 }
 pl(){ lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | grep -c LISTEN; }
 
+# 🔁 2026-11-10 20:16 加固：单次采样会撞上进程重启的瞬时状态（实测重启瞬间报 hunter=3）。
+#    关键服务（hunter/sup）异常时等 3 秒重测一次，仍异常才判定，避免误报。
 H=$(cnt 'node hunter35\.mjs'); S=$(cnt 'run-h35\.sh')
+if [ "$H" -ne 2 ] || [ "$S" -ne 2 ]; then
+  sleep 3
+  H2=$(cnt 'node hunter35\.mjs'); S2=$(cnt 'run-h35\.sh')
+  H=$H2; S=$S2
+fi
 C=$(cnt 'run-cache-cleaner\.sh'); R=$(cnt 'runtime-cleaner\.sh')
 P=$(cnt 'run-public\.sh'); RO=$(cnt 'public-readonly\.mjs'); HG=$(cnt 'health-guard\.sh')
 say "  进程  hunter=$H(2) sup=$S(2) cache=$C(1) runtime=$R(1) public=$P(1) readonly=$RO(1) health=$HG(1)"
