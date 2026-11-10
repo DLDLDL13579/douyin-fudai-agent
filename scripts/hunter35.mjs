@@ -100,6 +100,15 @@ const FOLLOW_ALLOW_INCONCLUSIVE=!!_FOLLOW.allowInconclusive;
 //    点击关注后的二次验证间隔、参与失败后的短冷却。二者都带上下限钳制，配置异常不会卡死主循环。
 const VERIFY_RETRY_MS=Math.max(0,Math.min(20000,Number(_FOLLOW.verifyRetryMs)||0));
 const RETRY_COOLDOWN_MS=Math.max(0,Math.min(600000,Number(_FOLLOW.retryCooldownMs)||0));
+// 🚫 2026-11-10 09:31 用户定稿「加同房间关注拦截3次则本轮跳过」：
+//    背景：main3 的网页会话关注写操作被服务端限制（同房间双账号对照已证实：
+//    主号 163→164 落库、main3 2→2 不落库），遇关注型房间必然 fans-panel 拦截，
+//    45s 短冷却后在同一房间反复撞墙。实测房间 76892461348 历史发袋 18 次但
+//    joinable 仅 1 次，却在 12 次拦截上白耗巡房时间。
+//    语义：同一房间累计 need-follow 达 N 次，就把该房间写入 12 分钟长窗跳过，
+//    让巡房时间流向真正能抢的房间。N=0 表示完全关闭此跳过行为（回退到旧逻辑）。
+//    注意：只影响「关注拦截」这一种结果；joined / packet-skipped 等其它结果不受影响。
+const FOLLOW_MAX_FAILS=Math.max(0,Math.min(20,Number(_FOLLOW.maxFailsPerRoom)||3));
 // 🧧 人气红包策略单一数据源：data/packet-config.json（2026-11-05 20:03 用户定稿「不抢人气红包」）。
 //    默认 detectEnabled=true / grabEnabled=false：识别并记真实结果，但不点「抢」、不消耗抖币。
 let _PACKET={detectEnabled:true,grabEnabled:false};
@@ -312,6 +321,9 @@ const HANDLED_TIME=new Map();   // 房间 -> 上次「成功参与」福袋的�
 //    但 [f值检查] 一直 candCount=1。改为「参与成功后才锁」，失败只给 RETRY_COOLDOWN_MS 短冷却。
 //    清理由同一 Map 的 size>300 分支负责，不新增第二个状态容器。
 let _RETRY_AT=new Map();        // 房间 -> 本次尝试失败后允许重试的最早时间戳（短冷却，非去重）
+// 🚫 2026-11-10：房间 -> 关注拦截累计次数。达到 FOLLOW_MAX_FAILS 后写长窗跳过本轮。
+//    只在 need-follow 时累加；任何一次成功参与都会清零（房间恢复了就该继续抢）。
+let _FOLLOW_FAILS=new Map();
 
 class CDP{
   constructor(ws){
@@ -2228,6 +2240,8 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
               const nowTs=Date.now();
               for(const [k,v] of HANDLED_TIME){ if(nowTs-v>15*60*1000) HANDLED_TIME.delete(k); }
               for(const [k,v] of _RETRY_AT){ if(nowTs>v) _RETRY_AT.delete(k); }
+              // 关注拦截计数随长窗一起收：房间已从长窗移除，计数也就没有意义了
+              for(const k of _FOLLOW_FAILS.keys()){ if(!HANDLED_TIME.has(k)) _FOLLOW_FAILS.delete(k); }
             }
             log(`★★ 福袋! 在线${d.online} ${disp(g.room)} ${JSON.stringify(d.fudai)}`);
             // 📸 福袋 DOM 快照：每次识别到福袋就把真实结构存档。
@@ -2335,9 +2349,24 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
             if(r.result==='joined'||r.result==='maybe-joined'||r.result==='packet-skipped'){
               HANDLED_TIME.set(g.room, Date.now());
               _RETRY_AT.delete(g.room);
+              // 房间能抢到（或终态），说明关注链路对它有效，计数器清零重新计
+              if(FOLLOW_MAX_FAILS>0) _FOLLOW_FAILS.delete(g.room);
+            }else if(r.result==='need-follow' && FOLLOW_MAX_FAILS>0){
+              // 🚫 2026-11-10 用户定稿：同房间关注拦截累计达 N 次 → 本轮跳过，不再 45s 撞墙。
+              //    只对 need-follow 累加；换房间后该房间记录保留到长窗过期。
+              const _n=(_FOLLOW_FAILS.get(g.room)||0)+1;
+              _FOLLOW_FAILS.set(g.room, _n);
+              if(_n>=FOLLOW_MAX_FAILS){
+                // 达到阈值：写 12 分钟长窗（与「已参与」同级的跳过语义），清短冷却
+                HANDLED_TIME.set(g.room, Date.now());
+                _RETRY_AT.delete(g.room);
+                log(`  🚫 关注拦截已达 ${_n}/${FOLLOW_MAX_FAILS} 次，本轮跳过该房间（12 分钟后再试）`);
+              }else{
+                _RETRY_AT.set(g.room, Date.now()+RETRY_COOLDOWN_MS);
+                log(`  ⏳ 参与未成，${RETRY_COOLDOWN_MS/1000}s 后重试（关注拦截 ${_n}/${FOLLOW_MAX_FAILS}）`);
+              }
             }else if(RETRY_COOLDOWN_MS>0){
               _RETRY_AT.set(g.room, Date.now()+RETRY_COOLDOWN_MS);
-              if(r.result==='need-follow') log(`  ⏳ 参与未成，${RETRY_COOLDOWN_MS/1000}s 后若福袋仍在将重试`);
             }
             // 📌 待关注清单只在真正「需要关注而抢不到」时写，且文案按真实结果。
             //    旧版这里无条件写「参与成功」，实测 18:42:36 明明是 need-follow，
