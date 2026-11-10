@@ -47,9 +47,9 @@ DY_ALIVE_LOG="$LOG_PATH" node -e "
     //   真正的判据不是「长度多少」，而是「长度是否已经稳定」：
     //   连续两次读到 >=350 且相差 <40，才算渲染完成。
     const nap=(ms)=>new Promise(r=>setTimeout(r,ms));
-    let len=0, prev=-1, stable=false, needLogin=false, loginStreak=0, commentBox=0;
+    let len=0, prev=-1, stable=false, needLogin=false, loginStreak=0, commentBox=0, fansPanel=false;
     for(let a=0;a<8;a++){
-      const d=await send('Runtime.evaluate',{expression:'(()=>{const t=document.body.innerText||\"\";return JSON.stringify({len:t.length,needLogin:/需先登录|请先登录|登录后参与|登录后可参与|登录后才能/.test(t),commentBox:document.querySelectorAll(\"[placeholder*=说点什么],[contenteditable=true]\").length})})()',returnByValue:true});
+      const d=await send('Runtime.evaluate',{expression:'(()=>{const t=document.body.innerText||\"\";return JSON.stringify({len:t.length,needLogin:/需先登录|请先登录|登录后参与|登录后可参与|登录后才能/.test(t),commentBox:document.querySelectorAll(\"[placeholder*=说点什么],[contenteditable=true]\").length,fansPanel:/钻石加入粉丝团|酷炫勋章|专属礼物|进场特效/.test(t)})})()',returnByValue:true});
       let info={};
       try{ info=JSON.parse(d.result.value||'{}'); }catch(e){}
       len=info.len||0;
@@ -59,7 +59,7 @@ DY_ALIVE_LOG="$LOG_PATH" node -e "
       //    真掉线文案必然连续多帧存在，单帧瞬态归零后不影响下一帧判断。
       loginStreak = info.needLogin ? loginStreak+1 : 0;
       if(loginStreak>=2) needLogin=true;
-      commentBox=info.commentBox||0;
+      commentBox=info.commentBox||0; fansPanel=!!info.fansPanel;
       if(len>=350 && Math.abs(len-prev)<40){ stable=true; break; }
       prev=len;
       await nap(1800);
@@ -93,8 +93,13 @@ DY_ALIVE_LOG="$LOG_PATH" node -e "
       ws.close(); return;
     }
 
-    // 非守候态：页面已稳定渲染却既无评论输入框，才判登录态可疑
-    if(stable && commentBox===0 && len>350){ console.log('LOGIN_SUSPECT no-comment-box len='+len+' (页面正常但无评论框，疑似未登录)'); ws.close(); process.exit(2); }
+    // 🔴 2026-11-11 06:17 修误报：房间内的粉丝团浮层会盖住评论输入框，
+    //    导致 len 变大（1664）却没有 contenteditable/textarea，被误判为未登录。
+    //    实测 9752 报 no-comment-box len=1664，但连续 5 次复测全 OK、
+    //    CDP 直查 needLogin=false 且浮层消失后评论框存在、正在正常抓福袋。
+    //    粉丝团浮层特征：页面含「钻石加入粉丝团 / 酷炫勋章 / 专属礼物 / 进场特效」。
+    //    有这些特征时不判未登录（浮层是房间内容，与登录态无关）。
+    if(stable && commentBox===0 && len>350 && !fansPanel){ console.log('LOGIN_SUSPECT no-comment-box len='+len+' (页面正常但无评论框，疑似未登录)'); ws.close(); process.exit(2); }
     // 重测 8 次累计约 13 秒仍未稳定 → 才认为页面真的有问题
     if(!stable && len<60){ console.log('EMPTY_PAGE len='+len+' (重测 13 秒仍为空，标签可能卡死)'); process.exit(5); }
     if(!stable && len>=60 && len<350){ console.log('SUSPECT_SHORT_PAGE len='+len+' (cookie 在但页面 13 秒未渲染完成)'); process.exit(3); }
