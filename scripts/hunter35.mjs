@@ -109,6 +109,25 @@ const RETRY_COOLDOWN_MS=Math.max(0,Math.min(600000,Number(_FOLLOW.retryCooldownM
 //    让巡房时间流向真正能抢的房间。N=0 表示完全关闭此跳过行为（回退到旧逻辑）。
 //    注意：只影响「关注拦截」这一种结果；joined / packet-skipped 等其它结果不受影响。
 const FOLLOW_MAX_FAILS=Math.max(0,Math.min(20,Number(_FOLLOW.maxFailsPerRoom)||3));
+// 🎯 2026-11-10 11:22 用户定稿「main3 只做探测，也可以抢福袋，不用关注，但不抢粉丝团福袋」：
+//    背景：main3 的网页端关注写操作被服务端临时限制（昨天 03:51~06:51 曾 9 次成功，
+//    今天 0 次），所有关注型福袋必然 fans-panel 拦截白耗巡房时间（实测 11/12 次）。
+//    用户决策：该账号不做关注动作，也不抢粉丝团型福袋，只抢「纯评论型」福袋。
+//    实现：按账号白名单下发策略，不影响主号（主号仍全抢、仍自动关注）。
+//    数据源：data/follow-config.json 的 skipFollowAccounts / skipFansGroupAccounts（数组）。
+//    ⚠ 空数组或未配置 = 所有账号保持原行为，零回归风险。
+const _skipFollowAcc = Array.isArray(_FOLLOW.skipFollowAccounts) ? _FOLLOW.skipFollowAccounts : [];
+const _skipFansAcc   = Array.isArray(_FOLLOW.skipFansGroupAccounts) ? _FOLLOW.skipFansGroupAccounts : [];
+// 🔗 2026-11-10 11:24 用户定稿「每个号的探测资源都是共享的，main3 就可以主要做探测，主号就可以抢」：
+//    现状：vip-cooldown.json / probe-today.json 都在各实例自己的 W 目录下，两号各探各的，
+//    同一房间会被两个号重复探测（浪费各自的探测名额，且更容易触发限流）。
+//    改为：探测冷却与当日探测计数统一落到 data/ 下的共享文件，
+//    任一账号探过的房间，另一个账号直接继承冷却，避免重复；
+//    同时 F 值检测用实时在线数，不依赖探测缓存，因此共享不会造成「看不到」。
+//    房间档案 anchors.json / room-names.json 本来就是共享的（shared-json 加锁）。
+const SHARED_PROBE = _FOLLOW.sharedProbePool !== false;   // 默认开启，可显式设 false 回退
+const SHARED_VIP_COOLDOWN = DATA_DIR + '/vip-cooldown-shared.json';
+const SHARED_PROBE_TODAY = DATA_DIR + '/probe-today-shared.json';
 // 🧧 人气红包策略单一数据源：data/packet-config.json（2026-11-05 20:03 用户定稿「不抢人气红包」）。
 //    默认 detectEnabled=true / grabEnabled=false：识别并记真实结果，但不点「抢」、不消耗抖币。
 let _PACKET={detectEnabled:true,grabEnabled:false};
@@ -1145,6 +1164,14 @@ async function tryJoin(tab,f,url,online){
     const cond=await pSearch(tab,'参与条件');
     if(fans.cnt>0||cond.cnt>0){
       out.steps.push(`panel@${pos.n}:fans${fans.cnt}/cond${cond.cnt}`);
+      // 🎯 2026-11-10 11:23：账号级「不抢粉丝团福袋」策略（用户定稿 main3）。
+      //    该账号遇到粉丝团型福袋直接返回 fans-skip-account，不加入粉丝团、不消耗抖币、
+      //    也不在面板上反复试探。主号不在白名单，仍按原逻辑加入粉丝团后参与。
+      if(fans.cnt>0 && _skipFansAcc.includes(ACCOUNT_TAG)){
+        out.steps.push('fans-skip-account');
+        out.result='fans-skip-account';
+        return out;
+      }
       if(fans.cnt>0){
         // 🧧 2026-11-04 用户解除限制：「粉丝团福袋都可以抢」。
         //    原来是「5 万人在线以上才加入粉丝团」，现在取消人数门槛，
@@ -1553,7 +1580,8 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
       // 🔍 主动探测高频 VIP 房：历史数据显示 92% 的成功参与集中在少数几间房，
       //    而它们常年不在首页推荐流里。不主动探就永远碰不到。
       //    限流保护：每轮最多探 2 个，探不到就冷却 30 分钟不再打扰。
-      const COOLDOWN_FILE=W+'/vip-cooldown.json';
+      // 🔗 2026-11-10：探测冷却改为共享（两号互不重复探同一房），可回退见 SHARED_PROBE
+      const COOLDOWN_FILE = SHARED_PROBE ? SHARED_VIP_COOLDOWN : (W+'/vip-cooldown.json');
       // 🧬 自主进化：记录每个 VIP 房探测失败次数，失败多的排到后面，
       //    避免已失效的直播间（如 354892492946）每轮都占用一个探测名额
       const FAIL_FILE=W+'/vip-fail-count.json';
@@ -1626,7 +1654,8 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
       //    没有它，「今天压根没播」的主播会被 24 小时轮着探（每次 5-24 秒），
       //    一天上百次纯浪费——这些时间本该用来盯真正在发福袋的房间。
       //    落盘保存，进程重启后不丢账。
-      const PROBE_TODAY_FILE=W+'/probe-today.json';
+      // 🔗 2026-11-10：当日探测账本改为共享（两号合并计数，避免重复探测同一房）
+      const PROBE_TODAY_FILE = SHARED_PROBE ? SHARED_PROBE_TODAY : (W+'/probe-today.json');
       let probeToday={date:'',rooms:{}};
       try{ probeToday=JSON.parse(fs.readFileSync(PROBE_TODAY_FILE,'utf8'))||{}; }catch(e){ probeToday={date:'',rooms:{}}; }
       const _todayStr=localDay();
@@ -1634,7 +1663,21 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
       if(!probeToday.rooms) probeToday.rooms={};
       const pRec=(room)=>{ if(!probeToday.rooms[room]) probeToday.rooms[room]={n:0,ok:false};
                            return probeToday.rooms[room]; };
-      const saveProbeToday=()=>{ try{ fs.writeFileSync(PROBE_TODAY_FILE, JSON.stringify(probeToday)); }catch(e){} };
+      // 🔗 共享模式下必须加锁合并写：两个实例同时跑，直接 writeFileSync 会互相覆盖。
+      //    非共享模式（SHARED_PROBE=false）保持原样，零回归。
+      const saveProbeToday=()=>{
+        try{
+          if(!SHARED_PROBE){ fs.writeFileSync(PROBE_TODAY_FILE, JSON.stringify(probeToday)); return; }
+          const cur=readSharedJson(PROBE_TODAY_FILE,{date:'',rooms:{}})||{};
+          if(cur.date===probeToday.date){
+            Object.assign(cur.rooms||{}, probeToday.rooms||{});
+            fs.writeFileSync(PROBE_TODAY_FILE+'.merge', JSON.stringify(cur));
+          }else{
+            fs.writeFileSync(PROBE_TODAY_FILE+'.merge', JSON.stringify(probeToday));
+          }
+          fs.renameSync(PROBE_TODAY_FILE+'.merge', PROBE_TODAY_FILE);
+        }catch(e){}
+      };
       // ⚠ 关键：候选必须来自 USER_PINNED 全集，不能从 deadVip 过滤。
       //    deadVip 只含 known-fudai-hosts.txt 里的房间，那些不在该文件里的指定主播
       //    会被整轮跳过（2026-11-02 实测某主播当天被探测 0 次）。
@@ -1719,7 +1762,7 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
             // 它会反复抢占探测名额，把真正在播的房间挤掉。
             cooldown[v]=nowTs-coolMs+8*60*1000;   // 8 分钟后即可重探
             log(`  ⚠️ 探测失败（${d?(d.__err||"loading"):"null"}，非下播），8 分钟后重试`);
-            try{ fs.writeFileSync(COOLDOWN_FILE, JSON.stringify(cooldown)); }catch(e){}
+            try{ if(SHARED_PROBE){ const _c=readSharedJson(COOLDOWN_FILE,{})||{}; Object.assign(_c,cooldown); fs.writeFileSync(COOLDOWN_FILE+'.merge',JSON.stringify(_c)); fs.renameSync(COOLDOWN_FILE+'.merge',COOLDOWN_FILE); } else { fs.writeFileSync(COOLDOWN_FILE, JSON.stringify(cooldown)); } }catch(e){}
             await sleep(1500);
             continue;
           }
@@ -1759,14 +1802,14 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
           }
           // 立即落盘：若等到轮末才写，中途重启会丢失计数（2026-11-02 实际踩过）
           try{ fs.writeFileSync(FAIL_FILE, JSON.stringify(failCount)); }catch(e){}
-          try{ fs.writeFileSync(COOLDOWN_FILE, JSON.stringify(cooldown)); }catch(e){}
+          try{ if(SHARED_PROBE){ const _c=readSharedJson(COOLDOWN_FILE,{})||{}; Object.assign(_c,cooldown); fs.writeFileSync(COOLDOWN_FILE+'.merge',JSON.stringify(_c)); fs.renameSync(COOLDOWN_FILE+'.merge',COOLDOWN_FILE); } else { fs.writeFileSync(COOLDOWN_FILE, JSON.stringify(cooldown)); } }catch(e){}
           const diag=d?`len=${d.len||0} exited=${!!d.exited} loading=${!!d.loading} online=${d.online}`:'null';
           log(`  ❌ 未在播（${diag}），冷却 ${Math.round(coolMs/60000)} 分钟`);
         }
         await sleep(1500);
       }
       if(probeList.length){
-        try{ fs.writeFileSync(COOLDOWN_FILE, JSON.stringify(cooldown)); }catch(e){}
+        try{ if(SHARED_PROBE){ const _c=readSharedJson(COOLDOWN_FILE,{})||{}; Object.assign(_c,cooldown); fs.writeFileSync(COOLDOWN_FILE+'.merge',JSON.stringify(_c)); fs.renameSync(COOLDOWN_FILE+'.merge',COOLDOWN_FILE); } else { fs.writeFileSync(COOLDOWN_FILE, JSON.stringify(cooldown)); } }catch(e){}
         try{ fs.writeFileSync(FAIL_FILE, JSON.stringify(failCount)); }catch(e){}
       }
 
@@ -2282,7 +2325,13 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
             //    的 inconclusive 一律拦截，宁可少抢也不虚报关注数。
             //    关注状态一律看当前页面 DOM，不读全局 followed-rooms.txt（天然按账号正确）。
             let _followPass=true;
-            if(FOLLOW_ENABLED){
+            // 🎯 2026-11-10 11:23：账号级「不做关注动作」策略（用户定稿 main3 免关注）。
+            //    该账号不调 ensureFollow、不写关注记录、也不因关注失败拦截，
+            //    直接把福袋交给 tryJoin —— 关注型福袋会由面板文案自然判为 need-follow，
+            //    纯评论型福袋则能正常参与。主号不在白名单，行为完全不变。
+            if(_skipFollowAcc.includes(ACCOUNT_TAG)){
+              log(`  📌 关注主播: ⏭️跳过（账号 ${ACCOUNT_TAG} 已配置免关注策略）`);
+            }else if(FOLLOW_ENABLED){
               const _fr=await ensureFollow(tab,g.room);
               // ⚠ 保留「关注主播:」字样：web/server.mjs 的 followTry/followOk 靠这个正则统计，
               //    改日志文案会让看板「关注能力」卡片归零。
