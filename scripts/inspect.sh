@@ -33,7 +33,24 @@ echo "════ 抖音福袋巡检 $(date '+%m-%d %H:%M:%S') ════"
 # ────────────────────────────────────────────────────────────
 echo
 say "【L0 服务层】"
-cnt(){ pgrep -f "$1" 2>/dev/null | wc -l | tr -d ' '; }
+# ⚠ 2026-11-10 19:47：这台机器 ps 受限（返回空），只能用 pgrep。
+#    实测巡检整轮跑时 H 偶尔变 4（实际 2 个 hunter），是 pgrep -f 匹配到了
+#    同轮里其它命令行含该串的瞬时子进程。用「排除自己 + 只数 node 进程」收紧。
+cnt(){
+  # 只排除「巡检脚本自身这一轮里的瞬时子进程」：
+  #   - 命令行含 scripts/inspect.sh 的（就是我自己）
+  #   - 纯 grep 进程
+  # 不排除 health-guard.sh —— 它本身就是要数的守护之一。
+  pgrep -f "$1" 2>/dev/null | while read -r _p; do
+    _cmd=$(ps -p "$_p" -o args= 2>/dev/null)
+    [ -z "$_cmd" ] && { echo "$_p"; continue; }
+    case "$_cmd" in
+      *inspect.sh*) ;;
+      grep\ *|grep) ;;
+      *) echo "$_p" ;;
+    esac
+  done | wc -l | tr -d ' '
+}
 pl(){ lsof -nP -iTCP:"$1" -sTCP:LISTEN 2>/dev/null | grep -c LISTEN; }
 
 H=$(cnt 'node hunter35\.mjs'); S=$(cnt 'run-h35\.sh')
