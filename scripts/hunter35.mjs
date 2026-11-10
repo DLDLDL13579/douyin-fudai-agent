@@ -570,23 +570,59 @@ async function fetchFollowingSet(tab){
   }catch(e){ return null; }
 }
 
-// 从当前直播间的网络请求里抓主播 uid（实测稳定可拿）
-// 用 Performance API 读已发生的 webcast 请求，无需额外监听
+// 从当前直播间的网络请求里抓主播 uid。
+// ⚠ 2026-11-10 16:50 实测发现缺口：部分房间的 webcast 资源项里**完全不含 to_user_id**
+//    （601309218434 实测 15 个 webcast 请求全是 CDN/监控，无 uid 参数），
+//    performance 路径会返回空 → 校验失效 → 该房间仍被误拦。
+//    改为四路兜底，任一路成功即可：
+//      ① performance 资源项（已加载的历史请求，最快）
+//      ② 页面 HTML 里的 sec_uid / uid 字段
+//      ③ 页面 RENDER_DATA / 内联 JSON
+//      ④ 主动 fetch 直播间详情接口（最可靠，但有网络开销）
 async function getAnchorUid(tab){
   try{
-    const r = await ev(tab, `(function(){
+    const r = await ev(tab, `(async function(){
       try{
+        // ① performance 资源项
         var es=performance.getEntriesByType('resource')||[];
         for(var i=es.length-1;i>=0;i--){
           var u=es[i].name||'';
           if(u.indexOf('webcast')<0) continue;
           var m=u.match(/to_user_id=(\d+)/)||u.match(/anchor_id=(\d+)/);
-          if(m) return m[1];
+          if(m) return JSON.stringify({uid:m[1],via:'perf'});
         }
-      }catch(e){}
-      return '';
-    })()`, 12000);
-    return String(r||'');
+        // ② 页面 HTML 内联数据
+        var html=document.documentElement.innerHTML;
+        var m2=html.match(/"owner_uid":"?(\d{8,})"?/)||html.match(/"anchor_uid":"?(\d{8,})"?/)
+                ||html.match(/"uid":"?(\d{8,})"?/);
+        if(m2) return JSON.stringify({uid:m2[1],via:'html'});
+        // ③ RENDER_DATA
+        var rd=document.getElementById('RENDER_DATA');
+        if(rd && rd.textContent){
+          try{
+            var txt=decodeURIComponent(rd.textContent);
+            var m3=txt.match(/"owner_uid":"?(\d{8,})"?/)||txt.match(/"uid":"?(\d{8,})"?/);
+            if(m3) return JSON.stringify({uid:m3[1],via:'render'});
+          }catch(e){}
+        }
+        // ④ 主动查直播间详情（roomId 从 URL 或页面状态拿）
+        var roomId='';
+        var m4=location.pathname.match(/\/(\d{6,})/);
+        if(m4) roomId=m4[1];
+        if(roomId){
+          try{
+            var j=JSON.parse(await (await fetch('/webcast/room/web/enter/?aid=6383&app_name=douyin_web&live_id=1&device_platform=web&room_id='+roomId+'&_t='+Date.now(),{credentials:'include',cache:'no-store'})).text());
+            var d=j.data||{};
+            var uid=(d.data&&d.data[0]&&d.data[0].owner&&d.data[0].owner.uid)||(d.user&&d.user.uid)||'';
+            if(uid) return JSON.stringify({uid:String(uid),via:'api'});
+          }catch(e){}
+        }
+        return JSON.stringify({uid:'',via:'none'});
+      }catch(e){ return JSON.stringify({uid:'',via:'err:'+String(e.message).slice(0,40)}) }
+    })()`, 20000);
+    const j = JSON.parse(r || '{}');
+    if(j.via && j.via!=='perf' && j.uid) log(`  🔑 主播 uid 取自 ${j.via}: ${j.uid}`);
+    return String(j.uid||'');
   }catch(e){ return ''; }
 }
 async function ensureDom(tab){try{await tab.cdp.send('DOM.enable',{},15000);const d=await tab.cdp.send('DOM.getDocument',{depth:-1,pierce:true},30000);return d?.root?.nodeId||null;}catch(e){return null;}}
