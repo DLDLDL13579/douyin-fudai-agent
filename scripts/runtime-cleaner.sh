@@ -31,7 +31,7 @@ LOCK="/tmp/fudai-runtime-cleaner.lock"
 if [ -e "$LOCK" ]; then
   OLD="$(cat "$LOCK" 2>/dev/null)"
   if [ -n "$OLD" ] && kill -0 "$OLD" 2>/dev/null; then
-    echo "[runtime-cleaner] 已有守护实例 PID $OLD，本进程退出"
+    echo "[runtime-cleaner] 已有守护实例 PID ${OLD}，本进程退出"
     exit 0
   fi
   rm -f "$LOCK"

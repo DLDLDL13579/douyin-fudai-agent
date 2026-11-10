@@ -175,12 +175,12 @@ cmd_start_all() {
   fi
   local n=0
   for acc in $accs; do
-    account_enabled "$acc" || { echo "  跳过 $acc（已禁用）"; continue; }
+    account_enabled "$acc" || { echo "  跳过 ${acc}（已禁用）"; continue; }
     if [ -n "$(account_pids "$acc")" ]; then echo "  已在运行: $acc"; continue; fi
     local work="$ROOT/accounts/$acc/work"
     mkdir -p "$work"
     nohup bash "$SCRIPTS/run-h35.sh" "$work" "$acc" >> "$work/supervisor.log" 2>&1 &
-    echo "  已启动: $acc（端口见 accounts/$acc/meta.json）"
+    echo "  已启动: ${acc}（端口见 accounts/$acc/meta.json）"
     n=$((n+1))
     # 错峰 30 秒：多账号同时抓首页容易触发风控
     [ "$n" -lt "$(echo "$accs" | wc -l | tr -d ' ')" ] && sleep 30
@@ -212,9 +212,9 @@ cmd_start_acc() {
     echo "可用账号:"; list_accounts | sed 's/^/  /'
     return
   fi
-  [ -d "$ROOT/accounts/$acc" ] || { echo "账号「$acc」不存在"; return; }
-  account_enabled "$acc" || { echo "账号「$acc」已禁用（meta.json enabled=false）"; return; }
-  if [ -n "$(account_pids "$acc")" ]; then echo "账号「$acc」已在运行"; return; fi
+  [ -d "$ROOT/accounts/$acc" ] || { echo "账号「${acc}」不存在"; return; }
+  account_enabled "$acc" || { echo "账号「${acc}」已禁用（meta.json enabled=false）"; return; }
+  if [ -n "$(account_pids "$acc")" ]; then echo "账号「${acc}」已在运行"; return; fi
   echo "启动前资源检查:"
   if ! mem_ok; then
     if [ "$force" = "--force" ]; then
@@ -231,11 +231,11 @@ cmd_start_acc() {
   for _i in $(seq 1 25); do
     sleep 2
     if [ -n "$(account_pids "$acc")" ]; then
-      echo "✅ 账号「$acc」已启动（约 $((_i*2)) 秒就绪），日志 $work/h35.log"
+      echo "✅ 账号「${acc}」已启动（约 $((_i*2)) 秒就绪），日志 $work/h35.log"
       return
     fi
   done
-  echo "❌ 账号「$acc」启动失败，查看 $work/supervisor.log"
+  echo "❌ 账号「${acc}」启动失败，查看 $work/supervisor.log"
 }
 
 cmd_stop_acc() {
@@ -255,7 +255,7 @@ cmd_stop_acc() {
     kill -9 "$p" 2>/dev/null
   done
   sleep 2
-  if [ -n "$(account_pids "$acc")" ]; then echo "⚠️ 「$acc」仍有残留进程"; else echo "✅ 账号「$acc」已停止"; fi
+  if [ -n "$(account_pids "$acc")" ]; then echo "⚠️ 「${acc}」仍有残留进程"; else echo "✅ 账号「${acc}」已停止"; fi
 }
 
 cmd_stop_all() {

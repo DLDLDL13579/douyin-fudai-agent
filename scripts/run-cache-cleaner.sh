@@ -19,7 +19,7 @@ INTERVAL="${DY_CACHE_CLEAN_INTERVAL:-1800}"
 LOCK="/tmp/fudai-cache-cleaner.lock"
 
 if [ ! -f "$CLEANER" ]; then
-  echo "[cache-cleaner] 找不到 $CLEANER，退出"
+  echo "[cache-cleaner] 找不到 ${CLEANER}，退出"
   exit 1
 fi
 
@@ -27,7 +27,7 @@ fi
 if [ -f "$LOCK" ]; then
   OLD=$(cat "$LOCK" 2>/dev/null)
   if [ -n "$OLD" ] && kill -0 "$OLD" 2>/dev/null; then
-    echo "[cache-cleaner] 已有守护实例 PID $OLD，本进程退出"
+    echo "[cache-cleaner] 已有守护实例 PID ${OLD}，本进程退出"
     exit 0
   fi
 fi

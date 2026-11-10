@@ -26,7 +26,7 @@ URL_FILE=/tmp/fudai-public-url.txt
 
 # 单实例锁：已有守护在跑就退出，避免多条隧道抢域名
 if [ -e "$LOCK" ] && kill -0 "$(cat "$LOCK" 2>/dev/null)" 2>/dev/null; then
-  echo "[public] 已有守护实例（锁 $LOCK），本进程退出"; exit 0
+  echo "[public] 已有守护实例（锁 ${LOCK}），本进程退出"; exit 0
 fi
 echo $$ > "$LOCK"
 trap 'rm -f "$LOCK"' EXIT INT TERM

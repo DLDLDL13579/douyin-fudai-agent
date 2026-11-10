@@ -12,7 +12,7 @@ PORT="${1:-8899}"
 LOCK="/tmp/fudai-web-${PORT}.lock"
 
 if ! mkdir "$LOCK" 2>/dev/null; then
-  echo "[supervisor] 已有看板守护实例（锁 $LOCK），本进程退出"
+  echo "[supervisor] 已有看板守护实例（锁 ${LOCK}），本进程退出"
   exit 0
 fi
 trap 'rmdir "$LOCK" 2>/dev/null' EXIT INT TERM

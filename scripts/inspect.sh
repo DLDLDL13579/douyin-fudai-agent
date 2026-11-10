@@ -96,7 +96,7 @@ for pp in 9750 9752; do
         case "$_retry" in *OK*) _ok=1; break;; esac
       done
       if [ "$_ok" = "1" ]; then
-        say "  ✅ $pp 瞬态已恢复（首测：${A:0:40}…｜复测：$_retry）"
+        say "  ✅ $pp 瞬态已恢复（首测：${A:0:40}…｜复测：${_retry}）"
       else
         say "  ⚠️  $pp 持续异常：$A"; L0BAD=$((L0BAD+1))
       fi;;
