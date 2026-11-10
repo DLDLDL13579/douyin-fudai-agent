@@ -12,5 +12,7 @@
   "skipFansGroupAccounts": [
     "main3"
   ],
-  "sharedProbePool": true
+  "sharedProbePool": true,
+  "daySkipFansGroup": true,
+  "daySkipFansGroupNote": "2026-11-10 用户定稿：白天时段(非晚间)不抢粉丝团福袋，只抢发弹幕型与关注型；晚间恢复原行为。与账号白名单 skipFansGroupAccounts 是「或」关系。"
 }

@@ -1061,6 +1061,8 @@ const LABEL = {
   // 2026-11-04 起粉丝团不再直接跳过，而是尝试加入（成功变 joined），
   // 仍是 skip-fans 说明「加入了但没抢到」或「加入失败」，标签要准确反映。
   'skip-fans':'粉丝团未加入','fans-no-coins':'抖币不足·需充值','fans-unverified':'粉丝团加入未确认','no-panel':'未找到面板',
+  // 🕐 2026-11-10 11:42：按账号/时段跳过粉丝团福袋（用户定稿：白天只抢关注型与发弹幕型）
+  'fans-skip-daytime':'粉丝团·白天不抢','fans-skip-account':'粉丝团·该账号不抢',
   'packet-skipped':'人气红包·按配置不抢','need-follow':'需要关注(抢不到)','btn-still':'按钮未消失'
 };
 async function tick(){
@@ -1277,6 +1279,8 @@ async function tick(){
           'maybe-joined': ['参与成功', 'ok'],
           'joined': ['参与成功', 'ok'],
           'skip-fans': ['粉丝团跳过', 'dim'],
+          'fans-skip-daytime': ['粉丝团·白天不抢', 'dim'],
+          'fans-skip-account': ['粉丝团·该号不抢', 'dim'],
           'fans-no-coins': ['抖币不足·需充值', 'warn'],
           'fans-unverified': ['粉丝团加入未确认', 'warn'],
           'need-follow': ['需关注', 'warn'],

@@ -118,6 +118,13 @@ const FOLLOW_MAX_FAILS=Math.max(0,Math.min(20,Number(_FOLLOW.maxFailsPerRoom)||3
 //    ⚠ 空数组或未配置 = 所有账号保持原行为，零回归风险。
 const _skipFollowAcc = Array.isArray(_FOLLOW.skipFollowAccounts) ? _FOLLOW.skipFollowAccounts : [];
 const _skipFansAcc   = Array.isArray(_FOLLOW.skipFansGroupAccounts) ? _FOLLOW.skipFansGroupAccounts : [];
+// 🕐 2026-11-10 11:41 用户定稿「白天不抢粉丝团福袋，只抢关注型和发弹幕型；晚间规则不变」：
+//    与账号白名单 skipFansGroupAccounts 是「或」关系：
+//      账号在白名单  → 任何时候都不抢粉丝团
+//      daySkipFansGroup=true → 白天时段（非晚间）任何账号都不抢粉丝团
+//    晚间时段（nightStart~nightEnd）恢复原行为，主号仍可加团后参与。
+//    判定用与门槛同一套 NIGHT_START/NIGHT_END，避免两处时段口径不一致。
+const DAY_SKIP_FANS = _FOLLOW.daySkipFansGroup === true;
 // 🔗 2026-11-10 11:24 用户定稿「每个号的探测资源都是共享的，main3 就可以主要做探测，主号就可以抢」：
 //    现状：vip-cooldown.json / probe-today.json 都在各实例自己的 W 目录下，两号各探各的，
 //    同一房间会被两个号重复探测（浪费各自的探测名额，且更容易触发限流）。
@@ -1167,9 +1174,12 @@ async function tryJoin(tab,f,url,online){
       // 🎯 2026-11-10 11:23：账号级「不抢粉丝团福袋」策略（用户定稿 main3）。
       //    该账号遇到粉丝团型福袋直接返回 fans-skip-account，不加入粉丝团、不消耗抖币、
       //    也不在面板上反复试探。主号不在白名单，仍按原逻辑加入粉丝团后参与。
-      if(fans.cnt>0 && _skipFansAcc.includes(ACCOUNT_TAG)){
-        out.steps.push('fans-skip-account');
-        out.result='fans-skip-account';
+      // 🕐 2026-11-10 11:41 增补：白天时段（非晚间）任何账号都不抢粉丝团福袋，
+      //    只抢关注型与发弹幕型；晚间恢复原行为。两者为「或」关系。
+      const _dayNoFans = DAY_SKIP_FANS && !isNightNow();
+      if(fans.cnt>0 && (_skipFansAcc.includes(ACCOUNT_TAG) || _dayNoFans)){
+        out.steps.push(_dayNoFans ? 'fans-skip-daytime' : 'fans-skip-account');
+        out.result = _dayNoFans ? 'fans-skip-daytime' : 'fans-skip-account';
         return out;
       }
       if(fans.cnt>0){
@@ -2416,7 +2426,12 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
             //      反复识别、反复截图、反复记 packet-skipped，污染统计并堆积截图。
             //    - 其余结果：不写长窗，只给 RETRY_COOLDOWN_MS 短冷却，让还活着的福袋能重试
             //    旧版在「发现福袋」时就写长窗，关注门禁一失败就把剩余 6分58秒 的福袋锁死 12 分钟。
-            if(r.result==='joined'||r.result==='maybe-joined'||r.result==='packet-skipped'){
+            if(r.result==='joined'||r.result==='maybe-joined'||r.result==='packet-skipped'
+               || r.result==='fans-skip-account' || r.result==='fans-skip-daytime'){
+              // 🔴 2026-11-10 11:42：粉丝团跳过（账号策略/白天策略）也是「终态」——
+              //    用户在白天明确不抢粉丝团，45s 短冷却只会让同一间房的粉丝团福袋
+              //    被反复识别、反复开面板、反复跳过，纯属浪费巡房时间。
+              //    故与 packet-skipped 同级处理：写 12 分钟长窗。
               HANDLED_TIME.set(g.room, Date.now());
               _RETRY_AT.delete(g.room);
               // 房间能抢到（或终态），说明关注链路对它有效，计数器清零重新计
