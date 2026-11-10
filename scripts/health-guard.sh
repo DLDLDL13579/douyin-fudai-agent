@@ -80,7 +80,7 @@ for _try in 1 2 3; do
   # 锁已存在：看持有者是否还活着
   _oldpid=$(cat "$LOCKDIR/pid" 2>/dev/null || echo 0)
   if [ "${_oldpid:-0}" -gt 1 ] && kill -0 "$_oldpid" 2>/dev/null; then
-    echo "[health] 已有守护实例 PID=$_oldpid，本进程退出"
+    echo "[health] 已有守护实例 PID=${_oldpid}，本进程退出"
     exit 0
   fi
   # 陈旧锁（持有者已死）→ 清掉重试
@@ -261,6 +261,26 @@ run_once(){
       alert H "🎉 新中奖记录 ${wn} 条！最新：${latest}"
     fi
     echo "${wn:-0}" > "$marker"
+  fi
+
+  # ── I 补发队列（配额耗尽时中奖消息会入队，配额恢复后自动补发）──────
+  local qfile="$ROOT/data/notify-queue.jsonl"
+  if [ -f "$qfile" ]; then
+    local qn; qn=$(wc -l < "$qfile" 2>/dev/null | tr -d ' ')
+    if [ "${qn:-0}" -gt 0 ]; then
+      say "📮 待补发消息 ${qn} 条，尝试补发"
+      local qres
+      qres=$(node -e '
+        import("./scripts/notify-serverchan.mjs").then(async m=>{
+          const r=await m.flushQueue({});
+          console.log(JSON.stringify(r));
+        }).catch(e=>console.log(JSON.stringify({err:String(e.message)})));
+      ' 2>/dev/null)
+      case "$qres" in
+        *'"sent":0'*) say "  配额仍未恢复，${qn} 条继续等待";;
+        *) say "  补发结果：$qres";;
+      esac
+    fi
   fi
 
   # ── 心跳 ────────────────────────────────────────────────────────────
