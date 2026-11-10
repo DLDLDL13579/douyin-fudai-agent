@@ -49,7 +49,24 @@ const PATHS = {
   participations: path.join(ROOT, 'data', 'participations.jsonl'),
   wins: path.join(ROOT, 'data', 'wins.jsonl'),
   legacy: path.join(ROOT, 'douyin-auto', 'h35-results.jsonl'),
-  log: path.join(ROOT, 'douyin-auto', 'h35.log'),
+  // 🔴 2026-11-10 19:18 用户指着看板质问「日志时间不对」后修：
+  //    主实例改用 `--account main` 后日志写到 accounts/main/work/h35.log，
+  //    而这里仍指向 douyin-auto/h35.log —— 那个文件从 10:31 起就冻结了
+  //    （尾部还是 cache-cleaner 的 SKIP 行），
+  //    于是看板「最近日志」一直显示上午 09:56 的旧内容，与真实时间差 9 小时。
+  //    改为 getter：每次访问都按 mtime 选最新的那个日志，新旧布局都兼容。
+  get log() {
+    const _cands = [
+      path.join(ROOT, 'accounts', 'main', 'work', 'h35.log'),
+      path.join(ROOT, 'accounts', 'main3', 'work', 'h35.log'),
+      path.join(ROOT, 'douyin-auto', 'h35.log'),
+    ];
+    let _best = _cands[2], _m = -1;
+    for (const c of _cands) {
+      try { const st = fs.statSync(c); if (st.mtimeMs > _m) { _m = st.mtimeMs; _best = c; } } catch {}
+    }
+    return _best;
+  },
   roundCounter: path.join(ROOT, 'douyin-auto', 'round-counter.txt'),
 };
 

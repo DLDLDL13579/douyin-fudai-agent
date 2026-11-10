@@ -90,10 +90,12 @@ order.forEach(([k,v])=>console.log("R "+k+" "+v+" "+(v/n*100).toFixed(1)));
 const acc={};
 today.forEach(r=>{const a=r.account||"?";acc[a]=acc[a]||{n:0,j:0};acc[a].n++;if(r.result==="joined"||r.result==="maybe-joined")acc[a].j++});
 Object.entries(acc).forEach(([a,v])=>console.log("A "+a+" "+v.n+" "+v.j+" "+(v.j/v.n*100).toFixed(1)));
-// 分时段（近3小时 vs 更早）
-const h=new Date().getHours();
-const recent=today.filter(r=>{const x=new Date(r.at).getHours();return x>=h-2&&x<=h});
-const older=today.filter(r=>{const x=new Date(r.at).getHours();return x<h-2});
+// 分时段（近3小时 vs 更早）——按真实时间戳算，不用整点窗口
+// ⚠ 2026-11-10 19:08 修正：原用 getHours()>=h-2 会让 19:08 时的窗口变成 17~19 点，
+//   只覆盖约 2 小时；且整点边界会把 16:59 的记录算进「更早」。改用 Date.now()-3h。
+const _cut=Date.now()-3*3600*1000;
+const recent=today.filter(r=>new Date(r.at).getTime()>=_cut);
+const older=today.filter(r=>new Date(r.at).getTime()<_cut);
 if(recent.length)console.log("P recent "+recent.length+" "+(recent.filter(r=>r.result==="joined"||r.result==="maybe-joined").length/recent.length*100).toFixed(1));
 if(older.length)console.log("P older "+older.length+" "+(older.filter(r=>r.result==="joined"||r.result==="maybe-joined").length/older.length*100).toFixed(1));
 // 亏损类别明细

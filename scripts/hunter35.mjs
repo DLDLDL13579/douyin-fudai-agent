@@ -2042,6 +2042,7 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
       // 提到 12 个配合更短停留，同样时间能覆盖更多房间。
       const CANDIDATES=12;
       const pool=[];
+      let _unknownOnline=0;   // ol<0 的探路名额计数（2026-11-10 19:16）
       for(const room of ordered2){
         const isVip=aliveVip.includes(room);
         const ol=roomOnline.has(room) ? roomOnline.get(room) : -1;
@@ -2057,6 +2058,19 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
         const VIP_FLOOR=500;
         const vipExempt = VIP_EXEMPT && isVip && ol>=VIP_FLOOR;
         if(ol>=0 && ol<minOnline && !vipExempt) continue;
+        // 🔴 2026-11-10 19:16 用户指着看板质问「你还说没问题」后修：
+        //    旧逻辑 ol<0（拿不到在线数）一律进池，理由是「进房才能解析到在线数」。
+        //    但晚间门槛 50000 时，60 个房间只有 3 个真达标，其余全是 ol=-1，
+        //    结果一轮常驻 17 次、11 次撞「门槛硬卡跳过」，纯白跑。
+        //    实测 log：达标 3/60 间，却常驻了 775263084570(10000)、158465078330(8169)、
+        //    金美希(-1)、阿伟走山村(-1) 等一堆不达标房。
+        //    改为：ol<0 的房间限额进池（最多 3 个，且只给 VIP），
+        //    既不放弃「可能刚开播的大房」，也不让满池未知房间淹没真正达标的。
+        if(ol<0){
+          if(!isVip) continue;                     // 非 VIP 拿不到人数，直接不进池
+          if(_unknownOnline >= 3) continue;         // VIP 也最多 3 个探路名额
+          _unknownOnline++;
+        }
         pool.push({room, online:ol, isVip, host, score:roomScore(host,'',ol,isVip)});
       }
       // 🎯 按优先级排序：游戏/娱乐类 + VIP 优先，带货类靠后
