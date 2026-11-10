@@ -168,6 +168,15 @@ else
   TOT=$(echo "$L1" | awk '/^TOTAL/{print $2}')
   JN=$(echo "$L1"  | awk '/^TOTAL/{print $4}')
   RT=$(echo "$L1"  | awk '/^TOTAL/{print $6}')
+  # 🔴 2026-11-11 00:46 口径统一：巡检原始数与看板 dedup 后数字会不同
+  #    （实测原始 8 条 vs 看板 4 条）。用户看看板，巡检必须同口径。
+  API_T=$(curl -s -m 6 http://127.0.0.1:8899/api/status 2>/dev/null | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const j=JSON.parse(s);console.log((j.stats?.todayTotal||0)+" "+(j.stats?.todayJoined||0))}catch(e){console.log("0 0")}})' 2>/dev/null)
+  read -r API_TOTAL API_JOINED <<< "${API_T:-0 0}"
+  if [ "${API_TOTAL:-0}" != "0" ] && [ "${TOT:-0}" != "${API_TOTAL}" ]; then
+    say "  ⚠️ 口径：巡检原始 ${TOT} 条 → 看板去重后 ${API_TOTAL} 条（同房间同账号12分钟内去重）"
+    TOT=$API_TOTAL; JN=$API_JOINED
+    [ "${TOT:-0}" -gt 0 ] && RT=$(awk -v a="$JN" -v b="$TOT" 'BEGIN{printf "%.1f", a/b*100}')
+  fi
   say "  今日遭遇 ${TOT} · 参与成功 ${JN} · 参与率 ${RT}%"
   say "  结果分布："
   echo "$L1" | awk '/^R /{printf "    %-22s %4s  %s%%\n", $2, $3, $4}'
