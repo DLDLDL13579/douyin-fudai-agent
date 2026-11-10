@@ -488,6 +488,52 @@ async function pSearch(tab,query){
     return{cnt,ids:g.nodeIds||[]};
   }catch(e){return{err:e.message,cnt:0,ids:[]};}
 }
+// 🔍 2026-11-10 15:18 多候选文案搜索（用户要求持续优化，解决 no-panel 33 次白消耗）：
+//    实测今日 33 次失败步骤完全相同：panel@图标中心:fans0/cond1 → cond-follow:ok(already)
+//    → 之后连搜 3 次「一键发评论参与福袋/参与福袋」全部 0 命中 → 落到 no-panel。
+//    对照成功的 55 次：点开图标直接出现「一键发评论参与福袋」按钮（btn@图标中心）。
+//    差异说明失败房间的参与按钮是另一套文案。DOM.performSearch 是子串匹配，
+//    一次只能搜一个串，故这里按候选列表依次尝试，命中即返回，语义与 pSearch 一致。
+//    候选顺序按「最可能」到「最宽泛」，避免宽泛词误命中弹幕或商品文案。
+const JOIN_BTN_QUERIES=[
+  '一键发评论参与福袋',
+  '发评论参与福袋',
+  '一键参与福袋',
+  '立即参与福袋',
+  '点击参与福袋',
+  '参与福袋',
+  '立即参与',
+  '点击参与',
+  '发弹幕参与',
+  '评论参与',
+  '参与抽奖',
+  '立即抽奖'
+];
+async function pSearchJoin(tab){
+  const tried=[];
+  for(const q of JOIN_BTN_QUERIES){
+    const r=await pSearch(tab,q);
+    if(r.cnt>0){ return {cnt:r.cnt, ids:r.ids, via:q, tried}; }
+    tried.push(q);
+  }
+  return {cnt:0, ids:[], via:null, tried};
+}
+
+// 🎯 2026-11-10 15:39 粉丝团入口多候选搜索（修 no-panel 真因）：
+//    实测截图定位：部分房间的参与方式按钮是「点亮粉丝团（1钻）」，而旧代码只搜
+//    「加入粉丝团」这一个精确串 → fans.cnt=0 → 不进粉丝团分支 → 走到 cond 分支
+//    再搜 12 个评论类按钮也全落空 → 最终 no-panel。今日 41 次（18.4%）全是这类。
+//    「点亮粉丝团 / 点亮粉丝牌 / 加入粉丝团」是同一入口的不同文案版本，统一识别。
+const FANS_GATE_QUERIES=['加入粉丝团','点亮粉丝团','点亮粉丝牌','立即加入粉丝团'];
+async function pSearchFans(tab){
+  const tried=[];
+  for(const q of FANS_GATE_QUERIES){
+    const r=await pSearch(tab,q);
+    if(r.cnt>0){ return {cnt:r.cnt, ids:r.ids, via:q, tried}; }
+    tried.push(q);
+  }
+  return {cnt:0, ids:[], via:null, tried};
+}
 async function ensureDom(tab){try{await tab.cdp.send('DOM.enable',{},15000);const d=await tab.cdp.send('DOM.getDocument',{depth:-1,pierce:true},30000);return d?.root?.nodeId||null;}catch(e){return null;}}
 async function getBox(tab,nodeId){
   try{
@@ -868,7 +914,7 @@ async function joinFansGroup(tab, roomArg){
       //   旧的 indexOf 宽松匹配会被「昵称容器包含文案」骗到错位元素；
       //   修正：开头匹配（startsWith）既能命中带价签的真按钮，
       //   又不会匹配到「xxx加入粉丝团yyy」这种恰好含关键词的长文案容器。
-      const KW=['加入粉丝团','点亮粉丝牌','立即加入'];
+      const KW=['加入粉丝团','点亮粉丝团','点亮粉丝牌','立即加入粉丝团','立即加入'];
       function drill(el){
         // 沿子树找「以关键词开头」的最小元素（截图证实按钮带（1钻）后缀）
         var best=el;
@@ -1107,8 +1153,8 @@ async function tryJoin(tab,f,url,online){
     const targetY=(typeof pos.y==='number')?pos.y:cy;
     await clickXY(tab,pos.x,targetY);
     await sleep(3000);
-    btn=await pSearch(tab,'一键发评论参与福袋');
-    log(`  [${pos.n}] 搜按钮:${btn.cnt}`);
+    btn=await pSearchJoin(tab);
+    log(`  [${pos.n}] 搜按钮:${btn.cnt}${btn.via?'('+btn.via+')':''}`);
     if(btn.cnt===0){
       // 点击后没有面板，截一张（仅首次，避免每轮 6 张堆积）
       if(pos.n==='图标中心') await shot(tab,`h35-AFTER-${url.split('/').pop()}-${pos.n}-${Date.now()}.png`);
@@ -1167,7 +1213,8 @@ async function tryJoin(tab,f,url,online){
       continue;
     }
 
-    const fans=await pSearch(tab,'加入粉丝团');
+    // 🎯 2026-11-10：粉丝团入口改用多候选（含『点亮粉丝团』），修 no-panel 主因
+    const fans=await pSearchFans(tab);
     const cond=await pSearch(tab,'参与条件');
     if(fans.cnt>0||cond.cnt>0){
       out.steps.push(`panel@${pos.n}:fans${fans.cnt}/cond${cond.cnt}`);
@@ -1195,15 +1242,14 @@ async function tryJoin(tab,f,url,online){
         // 不论加入是否验证通过，都再找一次参与按钮（用户要求：粉丝团福袋必须尝试参与）。
         // 20:20 吕德华实测：验证 __err 但参与按钮其实已就位，直接放弃会白白错过。
         await sleep(2000);
-        const b2=await pSearch(tab,'一键发评论参与福袋');
-        if(b2.cnt>0){ btn=b2; out.steps.push('fans-then-btn'); break; }
-        const b3=await pSearch(tab,'参与福袋');
-        if(b3.cnt>0){ btn=b3; out.steps.push('fans-then-any'); break; }
+        // 🔍 2026-11-10 15:19：粉丝团分支同样改用多候选文案搜索（与 cond-follow 一致）
+        const b2=await pSearchJoin(tab);
+        if(b2.cnt>0){ btn=b2; out.steps.push('fans-then-btn'+(b2.via?'('+b2.via+')':'')); break; }
         // 面板可能被弹窗顶掉：重新点一次福袋图标再扫
         try{
           await clickXY(tab, cx, cy); await sleep(2500);
-          const b4=await pSearch(tab,'一键发评论参与福袋');
-          if(b4.cnt>0){ btn=b4; out.steps.push('fans-reopen-btn'); break; }
+          const b4=await pSearchJoin(tab);
+          if(b4.cnt>0){ btn=b4; out.steps.push('fans-reopen-btn'+(b4.via?'('+b4.via+')':'')); break; }
         }catch(e){}
         out.steps.push(fj.noCoins?'fans-no-coins':'fans-joined-no-btn');
         // ❗ 不再叫 skip-fans：明确区分「账号没抖币」与「加入验证未确认」
@@ -1219,15 +1265,17 @@ async function tryJoin(tab,f,url,online){
       const fr=await ensureFollow(tab, room);
       out.steps.push('cond-follow:'+(fr.ok?'ok('+fr.reason+')':'fail('+fr.reason+')'));
       await sleep(2500);
-      const b2=await pSearch(tab,'一键发评论参与福袋');
-      if(b2.cnt>0){btn=b2;out.steps.push('follow-then-btn');break;}
-      const b3=await pSearch(tab,'参与福袋');
-      if(b3.cnt>0){btn=b3;out.steps.push('follow-then-any');break;}
-      // 面板可能被关注动作顶掉：重开一次再扫
+      // 🔍 2026-11-10 15:19：改用多候选文案搜索。原版只搜「一键发评论参与福袋」
+      //    与「参与福袋」两个精确串，实测 33 次全部 0 命中而落到 no-panel；
+      //    这里按 12 个候选依次尝试，命中即用，并记录实际命中文案到 steps 便于回溯。
+      const b2=await pSearchJoin(tab);
+      if(b2.cnt>0){btn=b2;out.steps.push('follow-then-btn'+(b2.via?'('+b2.via+')':''));break;}
+      out.steps.push('join-scan-miss:'+String((b2.tried||[]).length));
+      // 面板可能被关注动作顶掉：重开一次再扫（同样用多候选）
       try{
         await clickXY(tab, cx, cy); await sleep(2500);
-        const b4=await pSearch(tab,'一键发评论参与福袋');
-        if(b4.cnt>0){btn=b4;out.steps.push('follow-reopen-btn');break;}
+        const b4=await pSearchJoin(tab);
+        if(b4.cnt>0){btn=b4;out.steps.push('follow-reopen-btn'+(b4.via?'('+b4.via+')':''));break;}
       }catch(e){}
       if(!fr.ok && !fr.inconclusive){ out.result='need-follow'; return out; }
       break;
@@ -1295,7 +1343,8 @@ async function tryJoin(tab,f,url,online){
       return out;
     }
   }
-  const fans=await pSearch(tab,'加入粉丝团');
+  // 🎯 2026-11-10：兜底分支同样用多候选（含『点亮粉丝团』）
+  const fans=await pSearchFans(tab);
   if(fans.cnt>0){
     // 2026-11-04 解除限制后：这里不再直接跳过，而是尝试加入粉丝团后再参与。
     // （正常路径在循环内已处理，走到这里说明面板没打开但页面有粉丝团入口）
@@ -2213,7 +2262,24 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
                             + 'video{opacity:0 !important;}';
               document.head.appendChild(s);
             }
-            return n;
+            // 🔴 2026-11-10 15:29 修复 no-panel 真因（实测截图定位）：
+            //    因为 Chrome 带 --mute-audio 启动，抖音直播播放器会在屏幕中部（实测 y≈377）
+            //    渲染一个「因浏览器限制静音，按 P 或 点击打开声音」的黑色覆层。
+            //    福袋面板弹出时，「参与条件/按钮区」正好被这个覆层压住，
+            //    DOM.performSearch 能搜到按钮节点但点不到/被遮挡，表现为 panel 已开却取不到按钮
+            //    → 今日 35 次 no-panel（占 18.4%）全是这个原因。
+            //    修法：移除该覆层（实测移除后 hasMute 立刻变 false，页面内容反而更完整）。
+            //    只移除「含静音文案且文本很短」的覆层，不碰播放器主体与福袋元素。
+            let _muteN=0;
+            try{
+              document.querySelectorAll('[class*="Wn6sF12t"],[class*="fBv9dwfC"],[class*="RntNeJeO"]').forEach(function(el){
+                var t=(el.innerText||'');
+                if(t.length<80 && /浏览器限制静音|点击打开声音|按 P 或/.test(t)){
+                  el.style.display='none'; el.remove(); _muteN++;
+                }
+              });
+            }catch(e){}
+            return n+_muteN*100;
           })()`,10000);
         }catch(e){}
         // 📌 关注挪到「发现福袋」之后做——只关注真正发福袋的主播，不扫街式关注
