@@ -238,7 +238,25 @@ run_once(){
   local load5
   load5=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $3}')
   local load_i=${load5%.*}
-  [ "${load_i:-0}" -gt "$LOAD_WARN" ] && alert G "load5=${load5} 超阈值 ${LOAD_WARN}"
+  # 🔴 2026-11-10 16:29 优化 load 判据：单看 load 数值会持续误报。
+  #    实测 load 13~15 的大头是本机 DSH 进程（node dsh web，75% CPU，已跑近 6 小时），
+  #    用户自己的 Chrome 42 个进程也占一部分；抓取 Chrome 实测仅 0~4%。
+  #    真正该告警的是「抓取被拖慢」，所以加第二个条件：日志推进停滞。
+  #    只有 load 超阈值 **且** 日志确实停滞，才判定为自己这边出问题。
+  if [ "${load_i:-0}" -gt "$LOAD_WARN" ]; then
+    local _stalled=0
+    for pair in "main:$ACC_MAIN/h35.log" "main3:$ACC_MAIN3/h35.log"; do
+      local _f="${pair#*:}"
+      [ -f "$_f" ] || continue
+      local _age=$(( $(date +%s) - $(stat -f '%m' "$_f") ))
+      [ "$_age" -gt "$LOG_STALL_SEC" ] && _stalled=1
+    done
+    if [ "$_stalled" = "1" ]; then
+      alert G "load5=${load5} 超阈值 ${LOAD_WARN} 且抓取日志停滞，疑似被拖慢"
+    else
+      say "  load5=${load5} 超阈值但抓取日志正常推进（大头可能是本机其他进程），不告警"
+    fi
+  fi
 
   local memfree
   memfree=$(memory_pressure 2>/dev/null | grep -i 'free percentage' | grep -oE '[0-9]+' | head -1)
