@@ -213,6 +213,13 @@ run_once(){
   if [ "${e_total:-0}" -gt 20 ]; then
     [ "${e_np:-0}" -gt "$NOPANEL_PCT" ] && alert E "no-panel 占比 ${e_np}%（阈值${NOPANEL_PCT}%，共${e_total}条）"
     [ "${e_nf:-0}" -gt "$NEEDFOLLOW_PCT" ] && alert E "need-follow 占比 ${e_nf}%（阈值${NEEDFOLLOW_PCT}%，共${e_total}条）"
+    # 🔴 2026-11-10 16:47 用户批评「参与率太低，巡检没发现」后新增：
+    #    只看各结果占比还不够，必须有「参与率绝对值」这条硬指标。
+    #    参与率低于阈值直接告警，不再需要人肉翻看板。
+    local join_pct="${JOIN_MIN_PCT:-35}"
+    if [ "${e_jn:-0}" -lt "$join_pct" ]; then
+      alert E "🔴 参与率仅 ${e_jn}%（低于 ${join_pct}%，共${e_total}条）——详见 bash scripts/inspect.sh"
+    fi
   fi
 
   # ── F 看板一致性 ────────────────────────────────────────────────────
