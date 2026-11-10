@@ -60,6 +60,34 @@ for pp in 9750 9752; do
     *)               say "  ⚠️  $pp $A";;
   esac
 done
+# 🔴 2026-11-10 19:25 补：验证看板读的日志与真实日志是否同一份。
+#    用户 19:07 指出「日志时间似乎不对」，查实是看板读了冻结的旧文件
+#    （douyin-auto/h35.log 从 10:31 起没内容），而巡检只查 accounts/*/work/h35.log，
+#    两者不是同一份 → 巡检看不到看板的问题。这条补上这个盲区。
+CHKLOG=$(curl -s -m 6 http://127.0.0.1:8899/api/status 2>/dev/null | node -e '
+let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{
+  try{
+    const j=JSON.parse(s);
+    const t=(j.logTail||"").split("\n").filter(Boolean).pop()||"";
+    const m=t.match(/^\[(\d\d):(\d\d):(\d\d)\]/);
+    if(!m){console.log("NOSTAMP");process.exit(0)}
+    const now=new Date();
+    const lm=+m[1]*3600+ +m[2]*60+ +m[3];
+    const nm=now.getHours()*3600+now.getMinutes()*60+now.getSeconds();
+    let diff=nm-lm; if(diff<0)diff+=86400;
+    console.log(diff);
+  }catch(e){console.log("API_FAIL")}
+});' 2>/dev/null)
+case "$CHKLOG" in
+  API_FAIL|NOSTAMP|"") say "  ⚠️ 看板日志不可校验：$CHKLOG";;
+  *) if [ "$CHKLOG" -gt 120 ]; then
+       say "  ⛔ 看板日志落后真实时间 ${CHKLOG}s（可能读了冻结的旧文件）"
+       L0BAD=$((L0BAD+1))
+     else
+       say "  ✅ 看板日志与真实时间同步（差 ${CHKLOG}s）"
+     fi;;
+esac
+
 say "  L0 结论：$([ "$L0BAD" -eq 0 ] && echo '服务全部正常' || echo "$L0BAD 项异常")"
 
 # ────────────────────────────────────────────────────────────
