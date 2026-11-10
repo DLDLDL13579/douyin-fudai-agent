@@ -79,9 +79,27 @@ L0BAD=0
 for pp in 9750 9752; do
   A=$(bash "$ROOT/scripts/check-alive.sh" "$pp" 2>&1 | tail -1)
   case "$A" in
-    *LOGIN_EXPIRED*) say "  ⛔ $pp 登录失效：$A"; L0BAD=$((L0BAD+1));;
-    *OK*)            say "  ✅ $pp $A";;
-    *)               say "  ⚠️  $pp $A";;
+    *LOGIN_EXPIRED*)
+      say "  ⛔ $pp 登录失效：$A"; L0BAD=$((L0BAD+1));;
+    *OK*)
+      say "  ✅ $pp $A";;
+    *)
+      # 🔴 2026-11-11 04:16 优化：LOGIN_SUSPECT / EMPTY_PAGE 常是导航瞬态
+      #    （已知正常：VIP 探测、标签重建、守候浮层期间都会出现）。
+      #    实测 9752 报 LOGIN_SUSPECT no-comment-box len=1580，
+      #    但复测 3 次全 OK、needLogin=false、评论框存在、日志实时推进。
+      #    改为隔 8 秒复测 2 次，任一次 OK 就判为瞬态并明说，不再用 ⚠️ 吓人。
+      _retry=""; _ok=0
+      for _i in 1 2; do
+        sleep 8
+        _retry=$(bash "$ROOT/scripts/check-alive.sh" "$pp" 2>&1 | tail -1)
+        case "$_retry" in *OK*) _ok=1; break;; esac
+      done
+      if [ "$_ok" = "1" ]; then
+        say "  ✅ $pp 瞬态已恢复（首测：${A:0:40}…｜复测：$_retry）"
+      else
+        say "  ⚠️  $pp 持续异常：$A"; L0BAD=$((L0BAD+1))
+      fi;;
   esac
 done
 # 🔴 2026-11-10 19:25 补：验证看板读的日志与真实日志是否同一份。
