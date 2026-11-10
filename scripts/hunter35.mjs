@@ -552,8 +552,16 @@ let _followingCache = { at:0, set:null, uid:'' };
 //    但我们已经能把关注列表完整拉到本地（主号 300 人、main3 14 人），
 //    所以改用「主播名」匹配：head 里和日志里都有主播昵称，直接查本地名单。
 let _localFollow = null;   // { main:Set<name>, main3:Set<name> }
+let _localFollowMtime = 0; // 上次加载时文件的 mtime
 function loadLocalFollow(){
-  if(_localFollow) return _localFollow;
+  // 🔴 2026-11-11 07:46 修：原实现懒加载后永久缓存，文件更新了进程也不知道。
+  //    实测 hunter 进程 02:18 启动、缓存 07:17 刷新（主号 181→190 人），
+  //    进程内一直是旧数据，导致「周周古法健身操/煲小咪/楠楠钢琴演奏/
+  //    王子有氧健身操舞/阿新」这 5 个明明在关注列表里的主播被误拦。
+  //    改为检查文件 mtime，变了就重新加载（开销极小，一次 stat）。
+  let _mt = 0;
+  try{ _mt = fs.statSync(DATA_DIR+'/following-cache.json').mtimeMs; }catch(e){}
+  if(_localFollow && _mt && _mt === _localFollowMtime) return _localFollow;
   try{
     const raw = JSON.parse(fs.readFileSync(DATA_DIR+'/following-cache.json','utf8'))||{};
     const m = {};
@@ -561,6 +569,7 @@ function loadLocalFollow(){
       if(v && Array.isArray(v.list)) m[acc] = new Set(v.list.map(x=>String(x.name||'').trim()).filter(Boolean));
     }
     _localFollow = m;
+    _localFollowMtime = _mt;
     for(const [acc,st] of Object.entries(m)) log(`  📋 本地关注缓存已加载: ${acc} ${st.size} 人`);
     return m;
   }catch(e){ _localFollow = {}; return _localFollow; }
