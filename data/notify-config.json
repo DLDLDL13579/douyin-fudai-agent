@@ -1,0 +1,19 @@
+{
+  "note": "2026-11-10 用户定稿「如果中奖了，就要通过server酱给我发消息」。中奖与严重异常才推送，日常巡检不打扰。sendKey 直接复用 DSH 已有的 serverchan 配置，避免重复维护。",
+  "serverChan": {
+    "enabled": true,
+    "sendKey": "SCT453884TOcQT5Nq8ksCZYQ8Lb5a3i3I1",
+    "endpoint": "https://sctapi.ftqq.com/{key}.send"
+  },
+  "triggers": {
+    "win": true,
+    "newAccountLoginRequired": true,
+    "serviceDownMinutes": 10,
+    "diskBelowGi": 5,
+    "memoryFreeBelowPct": 20
+  },
+  "quiet": {
+    "note": "日常巡检、单次异常不推送，只在达到 triggers 的阈值时发",
+    "dailyDigest": false
+  }
+}

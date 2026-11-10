@@ -2655,6 +2655,23 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
                   try{
                     fs.appendFileSync(_win?WINS:LOSSES, JSON.stringify(_rec)+'\n');
                   }catch{}
+                  // 🎉 2026-11-10 16:17 用户定稿「如果中奖了，就要通过server酱给我发消息」：
+                  //    只在真中奖（_win=true）时推送，未中奖不打扰。
+                  //    推送是旁路：spawn 独立进程、stdio 忽略、unref 脱离，
+                  //    失败也不影响抓取主流程（异常只记日志）。
+                  if(_win){
+                    try{
+                      const _p=spawn(process.execPath,[
+                        ROOT+'/scripts/notify-serverchan.mjs','--win',
+                        '--room',String(g.room),
+                        '--text',String((dr.text||'').slice(0,300))
+                      ],{detached:true,stdio:'ignore'});
+                      _p.unref();
+                      log('  📱 中奖推送已发起（Server酱）');
+                    }catch(e){
+                      log('  ⚠️ 中奖推送失败: '+String(e.message).slice(0,80));
+                    }
+                  }
                   // 🧠 策略观测：开奖结果是「单位时间中奖期望」的分子。
                   //    decisionId 与 room-enter / join-result 串联，可算出
                   //    「这间房这次投入了多少秒、换回一次中奖/未中奖」。
