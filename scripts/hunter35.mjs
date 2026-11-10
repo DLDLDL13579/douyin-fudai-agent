@@ -1725,7 +1725,16 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
       // 每轮 5 个：2 个用户指定 + 3 个历史房。
       // 凌晨时段达标房间只有 14 个左右、VIP 房更是稀缺，多探 1 个的代价（约 24 秒）
       // 远小于错过一个正在发福袋的房间。白天房间多时 pinnedNow 用不满 2 个也无妨。
-      const probeList=[...pinnedNow.slice(0,2), ...otherNow.slice(0,3)];
+      // ⚖️ 2026-11-10 11:32 用户定稿「把资源重点倾向于主号」：
+      //    主号能关注、能加粉丝团，是真正能把福袋变成收益的号；
+      //    main3 已设为免关注 + 不抢粉丝团，遇到关注型/粉丝团型福袋只能跳过。
+      //    因此探测名额按账号差异化：主号多探（默认 2+3=5），受限账号少探，
+      //    把探测时间让给主号常驻更多房间。配置见 wait-config.json 的 probeQuota。
+      const _pq = (_WAIT && _WAIT.probeQuota) || {};
+      const _q  = (_pq[ACCOUNT_TAG] && typeof _pq[ACCOUNT_TAG]==='object') ? _pq[ACCOUNT_TAG] : {pinned:2,other:3};
+      const _qPin = Math.max(0, Math.min(5, Number(_q.pinned)||0));
+      const _qOth = Math.max(0, Math.min(6, Number(_q.other)||0));
+      const probeList=[...pinnedNow.slice(0,_qPin), ...otherNow.slice(0,_qOth)];
       if(pinnedNow.length) log(`📌 指定主播待探 ${pinnedNow.length} 个（当前 ${curH} 点，按时段优先）`);
       for(const v of probeList){
         log(`🔍 主动探测 VIP 房 ${v}`);
@@ -2021,7 +2030,13 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
           }
         }catch(e){}
         const nightLimit = goldDryRounds>=3 ? 10 : 6;   // 金矿空手 → 扩大扫描范围
-        const candLimit = deepNight ? Math.min(baseLimit, nightLimit) : baseLimit;
+        // ⚖️ 2026-11-10 11:33 用户定稿「把资源重点倾向于主号」：
+        //    主号是唯一能关注/加团、能把福袋变收益的号；受限账号遇到关注型/粉丝团型
+        //    只能跳过。因此每轮盯的候选数按账号差异化：主号多盯、受限账号少盯，
+        //    让主号的常驻覆盖率更高。配置见 wait-config.json 的 probeQuota.candLimit。
+        const _cl = ((_WAIT && _WAIT.probeQuota) || {})[ACCOUNT_TAG];
+        const _clN = (_cl && Number(_cl.candLimit)>0) ? Number(_cl.candLimit) : 0;
+        const candLimit = _clN>0 ? _clN : (deepNight ? Math.min(baseLimit, nightLimit) : baseLimit);
       for(const p of pool){
         if(good.length>=candLimit) break;
         good.push(p);
@@ -2086,7 +2101,13 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
         const hourTbl=(anchors[g.room]||{}).hourly||{};
         const thisHourCnt=hourTbl[new Date().getHours()]||0;
         const highYield=g.isVip && thisHourCnt>=4;
-        const perMs=highYield ? Math.round(WS*_WAIT.highYieldMs) : (g.isVip ? Math.round(WS*Math.max(_WAIT.vipMinMs, perMsBase/WS)) : perMsBase);
+        const perMsRaw=highYield ? Math.round(WS*_WAIT.highYieldMs) : (g.isVip ? Math.round(WS*Math.max(_WAIT.vipMinMs, perMsBase/WS)) : perMsBase);
+        // ⚖️ 2026-11-10 11:33 资源倾斜：账号级常驻倍率。
+        //    主号给 >1（待更久、更容易撞上开奖），受限账号给 <1（快速换房、多探多看）。
+        //    配置 wait-config.json 的 probeQuota.<账号>.perMsScale，未配置默认 1（零变化）。
+        const _ps = ((_WAIT && _WAIT.probeQuota) || {})[ACCOUNT_TAG];
+        const _psN = (_ps && Number(_ps.perMsScale)>0) ? Math.max(0.3, Math.min(3, Number(_ps.perMsScale))) : 1;
+        const perMs = Math.round(perMsRaw * _psN);
         log('');
         log(`=== 常驻 ${disp(g.room)}（在线${g.online}${g.isVip?' VIP':''}${highYield?` 🏆高频发袋(${new Date().getHours()}点历史${thisHourCnt}次)`:''}）${perMs/1000}秒 ===`);
         // 🧠 策略观测：房间时间投入的起点。roomStayId 与结束事件配对，

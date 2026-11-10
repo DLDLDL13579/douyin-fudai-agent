@@ -1,16 +1,31 @@
 {
- "scale": 0.125,
- "note": "直播间等待发福袋时间倍率。2026-11-04 用户最终定稿「改为1分钟」：0.5 → 0.25 → 0.125，常驻统一 60 秒。各类常驻基线 480000，乘 0.125 后普通房/VIP/高频金矿房统一 60 秒。noFudai 与空轮退避基线已上调，避免乘完短于常驻时长导致提前换房或频繁重采触发限流。只影响常驻/换房/空轮退避，不影响抢到福袋后的守候开奖。2026-11-05 新增 drawBufferSec/drawMaxSec/drawFallbackSec 三个守候开奖参数；新增 postDrawWaitSec 控制抢完福袋守完开奖后再留多久蹲下一个福袋，均不受 scale 影响。",
- "drawBufferSec": 60,
- "drawMaxSec": 1200,
- "drawFallbackSec": 900,
- "postDrawWaitSec": 120,
- "perRoomMinMs": 480000,
- "perRoomMaxMs": 480000,
- "vipMinMs": 480000,
- "highYieldMs": 480000,
- "noFudaiNormalMs": 600000,
- "noFudaiVipMinMs": 600000,
- "emptyRoundStepMs": 480000,
- "emptyRoundMaxMs": 600000
+  "scale": 0.125,
+  "note": "直播间等待发福袋时间倍率。2026-11-04 用户最终定稿「改为1分钟」：0.5 → 0.25 → 0.125，常驻统一 60 秒。各类常驻基线 480000，乘 0.125 后普通房/VIP/高频金矿房统一 60 秒。noFudai 与空轮退避基线已上调，避免乘完短于常驻时长导致提前换房或频繁重采触发限流。只影响常驻/换房/空轮退避，不影响抢到福袋后的守候开奖。2026-11-05 新增 drawBufferSec/drawMaxSec/drawFallbackSec 三个守候开奖参数；新增 postDrawWaitSec 控制抢完福袋守完开奖后再留多久蹲下一个福袋，均不受 scale 影响。",
+  "drawBufferSec": 60,
+  "drawMaxSec": 1200,
+  "drawFallbackSec": 900,
+  "postDrawWaitSec": 120,
+  "perRoomMinMs": 480000,
+  "perRoomMaxMs": 480000,
+  "vipMinMs": 480000,
+  "highYieldMs": 480000,
+  "noFudaiNormalMs": 600000,
+  "noFudaiVipMinMs": 600000,
+  "emptyRoundStepMs": 480000,
+  "emptyRoundMaxMs": 600000,
+  "probeQuota": {
+    "note": "2026-11-10 用户定稿「把资源重点倾向于主号」：主号能关注/加团，是真正能变现的号；main3 免关注+不抢粉丝团，遇到这两类只能跳过。故探测名额、每轮盯房数、常驻时长按账号差异化。未列出的账号走代码默认（2+3 名额、原 candLimit、倍率 1），零回归。",
+    "main": {
+      "pinned": 2,
+      "other": 4,
+      "candLimit": 8,
+      "perMsScale": 1.5
+    },
+    "main3": {
+      "pinned": 1,
+      "other": 1,
+      "candLimit": 3,
+      "perMsScale": 0.7
+    }
+  }
 }
