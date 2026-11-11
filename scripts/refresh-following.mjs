@@ -63,14 +63,18 @@ for (const [acc, port] of ACCOUNTS) {
       var j=JSON.parse(await (await fetch('/aweme/v1/web/user/profile/self/?device_platform=webapp&aid=6383&_t='+Date.now(),{credentials:'include',cache:'no-store'})).text());
       var u=j.user||{};
       if(!u.uid) return JSON.stringify({err:'no-uid'});
-      var all=[],off=0,more=true,p=0;
-      while(more&&p<15){
-        var k=JSON.parse(await (await fetch('/aweme/v1/web/user/following/list/?user_id='+u.uid+'&sec_user_id='+u.sec_uid+'&count=20&offset='+off+'&aid=6383&device_platform=webapp&_t='+Date.now(),{credentials:'include',cache:'no-store'})).text());
-        var arr=k.followings||[];
-        all=all.concat(arr.map(function(x){return {uid:String(x.uid),name:String(x.nickname||'')}}));
-        more=!!k.has_more; off+=20; p++; if(!arr.length)break;
-      }
-      return JSON.stringify({nick:u.nickname,count:u.following_count,list:all});
+      // 🔴 2026-11-11 08:19 重大发现：抖音关注列表接口有硬限制，
+      //    offset 被忽略（0/20/40 返回同一页）、min_time 游标失效、
+      //    count 被忽略（20/50/100/200 都只返回 20 条）。
+      //    实测账号有 195 个关注，但无论怎么翻页都只能拿到第一页 20 个。
+      //    所以这里只拉一次（20 条），靠 refresh-following.mjs 的累积合并
+      //    保留历史数据，避免越刷越少。
+      //    关键洞察：被 fans-panel 拦截的主播往往就在最新 20 个里
+      //    （最近关注的排在最前），所以这 20 条的实际价值最高。
+      var k=JSON.parse(await (await fetch('/aweme/v1/web/user/following/list/?user_id='+u.uid+'&sec_user_id='+u.sec_uid+'&count=20&aid=6383&device_platform=webapp&_t='+Date.now(),{credentials:'include',cache:'no-store'})).text());
+      var arr=k.followings||[];
+      var all=arr.map(function(x){return {uid:String(x.uid),name:String(x.nickname||'')}});
+      return JSON.stringify({nick:u.nickname,count:u.following_count,list:all,apiLimited:all.length<((u.following_count||0)-5)});
     }catch(e){return JSON.stringify({err:String(e.message).slice(0,80)})}})()`, 40000);
     const d = JSON.parse(r || '{}');
     if (Array.isArray(d.list)) {
@@ -90,9 +94,31 @@ for (const [acc, port] of ACCOUNTS) {
 if (!any) { console.log('  无任何账号成功，保留旧缓存'); process.exit(1); }
 if (DRY) { console.log('  [dry] 不写文件'); process.exit(0); }
 
-// 与旧缓存合并：某个账号失败时保留它上次的数据
+// 🔴 累积合并：API 只能拿到最新 20 个，但历史关注的仍有效，
+//    所以把新拿到的并进旧集合，绝不覆盖掉历史。
 let old = {};
 try { old = JSON.parse(fs.readFileSync(OUT, 'utf8')) || {}; } catch { /* ignore */ }
-const merged = { ...old, ...out };
+const merged = { ...old };
+for (const [acc, v] of Object.entries(out)) {
+  const prev = old[acc] || {};
+  const prevList = Array.isArray(prev.list) ? prev.list : [];
+  const byUid = new Map();
+  for (const x of prevList) if (x && x.uid) byUid.set(String(x.uid), x);
+  let added = 0;
+  for (const x of v.list) {
+    if (!x || !x.uid) continue;
+    if (!byUid.has(String(x.uid))) added++;
+    byUid.set(String(x.uid), x);
+  }
+  merged[acc] = {
+    nick: v.nick,
+    count: v.count,
+    at: v.at,
+    apiLimited: !!v.apiLimited,
+    list: [...byUid.values()],
+  };
+  const uniq = new Set(merged[acc].list.map((x) => String(x.name || '').trim()).filter(Boolean));
+  console.log(`  ${acc}: 本次拉到 ${v.list.length}，累积 ${merged[acc].list.length}（去重 ${uniq.size} 个昵称，新增 ${added}）`);
+}
 fs.writeFileSync(OUT, JSON.stringify(merged, null, 1));
 console.log(`  已写入 ${OUT}`);
