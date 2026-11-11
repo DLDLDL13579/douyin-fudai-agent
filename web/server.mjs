@@ -450,7 +450,13 @@ function buildStatus() {
   const today = localDay();
   const accLabels = accountLabels(accs);
 
-  const todayRows = rows.filter((r) => isLocalDay(r.at, today));
+  // 🔴 2026-11-12 00:21 修跨天统计 bug：原来 todayRows 从「全量 dedupRows 后的 rows」
+  //    里按今日过滤，会让昨日 23:5x 与今日 00:0x 相隔 <12 分钟的同房间+账号记录
+  //    互相吃掉，今日战绩被系统性低估（实测 557481980778 今 00:09:22 main3
+  //    被昨 23:59:09 main3 吃掉，看板 main3 今日=0）。
+  //    修法：今日统计独立「先按本地日过滤原始行，再 dedupRows」，与
+  //    scripts/stats-today.mjs 口径一致；rows 全量去重仍供历史卡片，零改动。
+  const todayRows = dedupRows([...readJsonl(PATHS.participations), ...readJsonl(PATHS.legacy).map((r) => ({ ...r, account: 'default' }))].filter((r) => isLocalDay(r.at, today)));
   const joined = todayRows.filter((r) => r.result === 'joined' || r.result === 'maybe-joined');
   const byResult = {};
   for (const r of todayRows) byResult[r.result || 'unknown'] = (byResult[r.result || 'unknown'] || 0) + 1;
