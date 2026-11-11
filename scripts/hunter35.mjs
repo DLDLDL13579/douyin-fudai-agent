@@ -1007,6 +1007,20 @@ async function _ensureFollowImpl(tab, room){
               return {ok:true, reason:'already-by-name',
                 diag:{verifyHow:'already-by-name',room,bodyLen:st.bodyLen,head:st.head}};
             }
+            // 🔴 2026-11-11 09:54 用户报「主号也关注不了」的真正根因：
+            //    实测主播「颖姐财经」确实在主号关注列表第一页（服务端 197 个关注里第一个），
+            //    但本地缓存是 6 小时前的快照（只有 190 人那批），查不到它 →
+            //    已关注的房间被判未关注而拦截，表现就像「关注不了」。
+            //    本地命中不了时，强制重读一次缓存文件（管他 mtime 有没有变），
+            //    因为文件可能是别的进程刚写的；仍不中才认输。
+            if(!_byName){
+              _localFollow = null; _localFollowMtime = 0;
+              if(isFollowedByName(room)){
+                log(`  🔑 重读缓存后命中：${NAMES[room]||room} 已关注，放行`);
+                return {ok:true, reason:'already-by-name-reload',
+                  diag:{verifyHow:'already-by-name-reload',room,bodyLen:st.bodyLen,head:st.head}};
+              }
+            }
             log(`  🔑 uid 空且本地名单未命中：${NAMES[room]||room}，保持拦截`);
           }
         }catch(e){ log(`  ⚠️ 关注校验异常: ${String(e.message||e).slice(0,100)}`); }
