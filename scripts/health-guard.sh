@@ -289,27 +289,45 @@ run_once(){
     say "🧠 重新学习黑名单/时段画像：${_lres//$'\n'/ | }"
   fi
 
-  # ── I2 定期刷新本地关注名单（每 6 小时）────────────────────────────
-  # 🔴 2026-11-11 07:17：hunter35 的 fans-panel 校验依赖 data/following-cache.json，
-  #    实测 5 小时后主号关注数从 181 涨到 190，新增的未进缓存，会导致
-  #    「uid 拿不到 + 本地名单未命中」时误拦已关注的房间。
-  #    刷新本身要开 CDP 页面，开销不小，6 小时一次足够（关注变化不频繁）。
+  # ── I2 关注名单刷新：20 分钟快刷 + 1 小时全量拉全 ─────────────────
+  # 🔴 2026-11-11 17:22 根治「已关注却被判需关注」：
+  #    /aweme/v1/web/user/following/list/ 的 offset/min_time/count 全被服务端忽略，
+  #    只能拿第一页 20 人，而账号实际关注 206 人 → 全天 44 条已关注房间被误拦。
+  #    决定性发现：max_time 是真游标，链式翻页 186 页 / 60-75 秒可拉到 206/206。
+  #    故 --full 每小时跑一次（2026-11-11 用户定稿「每小时后台拉全」），
+  #    20 分钟快刷保留，用于尽快捕获「刚关注的新主播」，两者互斥不重复跑。
+  #    hunter 侧有 mtime 热重载，缓存写完立即生效，不需要重启 hunter。
   local _fc="$ROOT/data/following-cache.json"
   local _fc_age=999999
   if [ -f "$_fc" ]; then
     _fc_age=$(( $(date +%s) - $(stat -f '%m' "$_fc") ))
   fi
-  # 🔴 2026-11-11 09:53 用户报「主号也关注不了」后的根因修复：
-  #    实测主播「颖姐财经」确实在主号关注列表第一页，但本地缓存没有它，
-  #    因为缓存是 6 小时才刷一次（08:20 刷的只到 190 人，09:53 已 197 人）。
-  #    hunter 校验时查不到就判未关注 → 好端端的福袋被拦。
-  #    6 小时太长，改为 20 分钟——刷一次只开 2 个 CDP 页面、整个流程约 20 秒，
-  #    相对 20 分钟的抓取时长可忽略，换来的是「新关注的主播几乎立即能被识别」。
-  if [ "$_fc_age" -gt 1200 ]; then
-    say "🔄 关注名单缓存已 ${_fc_age}s 未更新，开始刷新"
+  # 全量节拍用独立标记，不能用缓存 mtime（它被 20 分钟快刷频繁更新，会永远到不了 1 小时）
+  local _full_stamp="$ROOT/data/.following-full-at"
+  local _full_age=999999
+  if [ -f "$_full_stamp" ]; then
+    _full_age=$(( $(date +%s) - $(stat -f '%m' "$_full_stamp") ))
+  fi
+
+  if [ "$_full_age" -gt 3600 ]; then
+    say "🔄 关注名单全量拉全已 ${_full_age}s 未跑，开始 --full"
+    local _fres
+    _fres=$(node "$ROOT/scripts/refresh-following.mjs" --full 2>&1 | tail -3)
+    say "  全量结果：${_fres//$'\n'/ | }"
+    # 只在缓存确实被重写（mtime 变新）时才打标记；失败则下一轮自动重试。
+    local _now _fc_m
+    _now=$(date +%s)
+    _fc_m=$(stat -f '%m' "$_fc" 2>/dev/null || echo 0)
+    if [ "$(( _now - _fc_m ))" -lt 120 ]; then
+      touch "$_full_stamp"
+    else
+      say "  ⚠ 全量未写缓存（可能失败），不打标记，下轮重试"
+    fi
+  elif [ "$_fc_age" -gt 1200 ]; then
+    say "🔄 关注名单缓存已 ${_fc_age}s 未更新，开始快刷"
     local _rres
     _rres=$(node "$ROOT/scripts/refresh-following.mjs" 2>&1 | tail -3)
-    say "  刷新结果：${_rres//$'\n'/ | }"
+    say "  快刷结果：${_rres//$'\n'/ | }"
   fi
 
   # ── H 中奖告警 ──────────────────────────────────────────────────────

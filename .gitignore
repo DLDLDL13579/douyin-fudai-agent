@@ -65,3 +65,8 @@ nohup.out
 data/following-cache.json
 data/notify-queue.jsonl
 data/cond1-captures/
+
+# 运行时生成：关注名单全量刷新标记 / 澜澜身份映射
+data/.following-full-at
+data/probe-today-shared.json
+data/vip-cooldown-shared.json

@@ -1,15 +1,22 @@
 #!/usr/bin/env node
 /**
- * 刷新本地关注名单缓存（2026-11-11 07:16）
+ * 刷新本地关注名单缓存（2026-11-11 07:16 创建，17:25 全量翻页改造）
  *
- * 背景：hunter35 的 fans-panel 校验会读 data/following-cache.json，
- * 但该文件原先只在手工跑一次，实测 5 小时后主号关注数已从 181 涨到 190，
- * 新增的 9 个关注没进缓存，导致「uid 拿不到 + 本地名单未命中」时误拦。
+ * 背景：hunter35 的 fans-panel 校验会读 data/following-cache.json。
+ * 该文件原先只能拿到关注列表第一页 20 个（实测 /aweme/v1/web/user/following/list/
+ * 的 offset / min_time / count 全被服务端忽略），而账号实际关注 206 人，
+ * 导致「已关注主播」查不到 → 被误判 need-follow。全天 44 条误判皆源于此。
  *
- * 本脚本从两个实例的 /user/self 拉取最新关注列表并覆盖缓存。
- * 由 health-guard 每 6 小时调用一次（关注变化不频繁，不需要更密）。
+ * 🔑 2026-11-11 17:22 决定性发现：max_time 是真游标。
+ *    把「上一页返回的 max_time」作为下一页参数，每页首条都不同，
+ *    186 页 / 74.2 秒实测拉到 206/206 = 100% 覆盖。
  *
- * 用法：node scripts/refresh-following.mjs [--dry]
+ * 两种模式：
+ *   --full  链式翻页拉全（约 75-95 秒），供 health-guard 每小时跑一次
+ *   无参数  只拉第一页 20 个（约 10 秒），供 20 分钟级捕获刚关注的新主播
+ *   --dry   只打印不写文件
+ *
+ * hunter35 侧只读缓存、零改动、零额外请求。
  */
 
 import fs from 'node:fs';
@@ -21,6 +28,11 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = path.join(ROOT, 'data', 'following-cache.json');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const DRY = process.argv.includes('--dry');
+const FULL = process.argv.includes('--full');
+
+// 全量约 75-95 秒，加硬看门狗：CDP 万一挂死也不至于把 health-guard 永久卡住。
+const _wd = setTimeout(() => { console.error('  ⏰ refresh-following 超时，强制退出'); process.exit(2); }, FULL ? 150000 : 60000);
+if (typeof _wd.unref === 'function') _wd.unref();
 
 const req = (port, p, m = 'GET') =>
   new Promise((res, rej) => {
@@ -52,34 +64,53 @@ for (const [acc, port] of ACCOUNTS) {
       const k = ++id; q.set(k, r);
       ws.send(JSON.stringify({ id: k, method: m, params: a }));
     });
-    const ev = async (expression, to = 30000) => {
-      const r = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }, to);
+    // ⚠ timeout 必须放进 CDP params。原实现把它当 send 的第三个参数，
+    //   而 send 只接 (m,a)，超时其实从未生效；全量翻页需要 120 秒。
+    const ev = async (expression, timeoutMs = 40000) => {
+      const r = await send('Runtime.evaluate',
+        { expression, returnByValue: true, awaitPromise: true, timeout: timeoutMs });
       return r?.result?.result?.value;
     };
 
     await send('Page.navigate', { url: 'https://www.douyin.com/user/self' });
     await sleep(8000);
-    const r = await ev(`(async()=>{try{
-      var j=JSON.parse(await (await fetch('/aweme/v1/web/user/profile/self/?device_platform=webapp&aid=6383&_t='+Date.now(),{credentials:'include',cache:'no-store'})).text());
-      var u=j.user||{};
-      if(!u.uid) return JSON.stringify({err:'no-uid'});
-      // 🔴 2026-11-11 08:19 重大发现：抖音关注列表接口有硬限制，
-      //    offset 被忽略（0/20/40 返回同一页）、min_time 游标失效、
-      //    count 被忽略（20/50/100/200 都只返回 20 条）。
-      //    实测账号有 195 个关注，但无论怎么翻页都只能拿到第一页 20 个。
-      //    所以这里只拉一次（20 条），靠 refresh-following.mjs 的累积合并
-      //    保留历史数据，避免越刷越少。
-      //    关键洞察：被 fans-panel 拦截的主播往往就在最新 20 个里
-      //    （最近关注的排在最前），所以这 20 条的实际价值最高。
-      var k=JSON.parse(await (await fetch('/aweme/v1/web/user/following/list/?user_id='+u.uid+'&sec_user_id='+u.sec_uid+'&count=20&aid=6383&device_platform=webapp&_t='+Date.now(),{credentials:'include',cache:'no-store'})).text());
-      var arr=k.followings||[];
-      var all=arr.map(function(x){return {uid:String(x.uid),name:String(x.nickname||'')}});
-      return JSON.stringify({nick:u.nickname,count:u.following_count,list:all,apiLimited:all.length<((u.following_count||0)-5)});
-    }catch(e){return JSON.stringify({err:String(e.message).slice(0,80)})}})()`, 40000);
+    const r = await ev(`(async()=>{
+      const FULL=${FULL ? 'true' : 'false'}, MAX_PAGES=${FULL ? 400 : 1}, HARD_STOP_MS=${FULL ? 95000 : 8000};
+      const t0=Date.now();
+      try{
+        var j=JSON.parse(await (await fetch('/aweme/v1/web/user/profile/self/?device_platform=webapp&aid=6383&_t='+Date.now(),{credentials:'include',cache:'no-store'})).text());
+        var u=j.user||{};
+        if(!u.uid) return JSON.stringify({err:'no-uid'});
+        // 🔑 max_time 链式翻页：offset/min_time/count 实测都被服务端忽略，
+        //    只有用「上一页返回的 max_time」当下一页参数，才会返回不同的一批人。
+        var base='/aweme/v1/web/user/following/list/?user_id='+u.uid+'&sec_user_id='+u.sec_uid+'&count=20&aid=6383&device_platform=webapp';
+        var byUid=new Map(), cursor='', pages=0, stall=0, lastSize=0;
+        for(;pages<MAX_PAGES;pages++){
+          var k=JSON.parse(await (await fetch(base+(cursor?'&max_time='+cursor:'')+'&_t='+Date.now(),{credentials:'include',cache:'no-store'})).text());
+          var arr=k.followings||[];
+          arr.forEach(function(x){ if(x&&x.uid) byUid.set(String(x.uid),{uid:String(x.uid),name:String(x.nickname||'')}); });
+          if(!FULL) break;
+          var next=k.max_time;
+          if(!k.has_more||!next||String(next)===String(cursor)) break;
+          if(byUid.size===lastSize){ stall++; if(stall>=12) break; } else stall=0;
+          lastSize=byUid.size; cursor=next;
+          if(byUid.size>=Number(u.following_count||0)) break;
+          if(Date.now()-t0>HARD_STOP_MS) break;
+        }
+        var all=[...byUid.values()];
+        return JSON.stringify({nick:u.nickname,count:u.following_count,list:all,
+          pages:pages,ms:Date.now()-t0,full:FULL,
+          apiLimited: all.length < (Number(u.following_count||0)-5)});
+      }catch(e){return JSON.stringify({err:String(e.message).slice(0,80)})}
+    })()`, FULL ? 120000 : 40000);
     const d = JSON.parse(r || '{}');
     if (Array.isArray(d.list)) {
-      out[acc] = { nick: d.nick, count: d.count, at: new Date().toISOString(), list: d.list };
-      console.log(`  ${acc}: ${d.count} 人，拉到 ${d.list.length}`);
+      out[acc] = {
+        nick: d.nick, count: d.count, at: new Date().toISOString(), list: d.list,
+        full: !!d.full, pages: d.pages, ms: d.ms, apiLimited: !!d.apiLimited,
+      };
+      console.log(`  ${acc}: ${d.count} 人，拉到 ${d.list.length}` +
+        (d.full ? `（全量 ${d.pages} 页 / ${(d.ms / 1000).toFixed(1)}s）` : ''));
       any = true;
     } else {
       console.log(`  ${acc}: 失败 ${d.err || '未知'}`);
@@ -94,8 +125,7 @@ for (const [acc, port] of ACCOUNTS) {
 if (!any) { console.log('  无任何账号成功，保留旧缓存'); process.exit(1); }
 if (DRY) { console.log('  [dry] 不写文件'); process.exit(0); }
 
-// 🔴 累积合并：API 只能拿到最新 20 个，但历史关注的仍有效，
-//    所以把新拿到的并进旧集合，绝不覆盖掉历史。
+// 累积合并：新旧按 uid 并集，绝不覆盖掉历史（含已取关但福袋仍可抢的房间）。
 let old = {};
 try { old = JSON.parse(fs.readFileSync(OUT, 'utf8')) || {}; } catch { /* ignore */ }
 const merged = { ...old };
@@ -115,6 +145,9 @@ for (const [acc, v] of Object.entries(out)) {
     count: v.count,
     at: v.at,
     apiLimited: !!v.apiLimited,
+    full: !!v.full,
+    pages: v.pages,
+    ms: v.ms,
     list: [...byUid.values()],
   };
   const uniq = new Set(merged[acc].list.map((x) => String(x.name || '').trim()).filter(Boolean));
