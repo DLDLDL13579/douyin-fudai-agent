@@ -10,5 +10,9 @@
   "skipFansGroupAccounts": [],
   "sharedProbePool": true,
   "daySkipFansGroup": true,
-  "daySkipFansGroupNote": "2026-11-10 用户定稿：白天时段(非晚间)不抢粉丝团福袋，只抢发弹幕型与关注型；晚间恢复原行为。与账号白名单 skipFansGroupAccounts 是「或」关系。"
+  "daySkipFansGroupNote": "2026-11-10 用户定稿：白天时段(非晚间)不抢粉丝团福袋，只抢发弹幕型与关注型；晚间恢复原行为。与账号白名单 skipFansGroupAccounts 是「或」关系。",
+  "maxFailsPerRoomByAccount": {
+    "note": "2026-11-11 09:31 用户选择「维持现状」后优化：main3 关注写操作被服务端限制，遇到未关注主播必然失败，它的重试纯属浪费。把它的同房间重试次数从 3 降到 1，省下时间巡更多房间。主号保持 3 不变（它能正常关注，重试有价值）。",
+    "main3": 1
+  }
 }

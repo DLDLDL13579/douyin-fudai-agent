@@ -108,7 +108,18 @@ const RETRY_COOLDOWN_MS=Math.max(0,Math.min(600000,Number(_FOLLOW.retryCooldownM
 //    语义：同一房间累计 need-follow 达 N 次，就把该房间写入 12 分钟长窗跳过，
 //    让巡房时间流向真正能抢的房间。N=0 表示完全关闭此跳过行为（回退到旧逻辑）。
 //    注意：只影响「关注拦截」这一种结果；joined / packet-skipped 等其它结果不受影响。
-const FOLLOW_MAX_FAILS=Math.max(0,Math.min(20,Number(_FOLLOW.maxFailsPerRoom)||3));
+// 🎯 2026-11-11 09:31 用户选「维持现状」后的效率优化：
+//    main3 的关注写操作被服务端限制（实测关注数长期停在 14），
+//    遇到任何未关注主播必然失败。它的「同房间重试 3 次」纯属浪费：
+//    实测本次进程 24 次重试 × 45 秒 = 18 分钟白耗，同期抢到 0 个福袋。
+//    主号能正常关注（195 个关注、写操作有效），重试有价值，保持 3 不变。
+//    故支持按账号覆盖，配置见 follow-config.json 的 maxFailsPerRoomByAccount。
+const _failsByAcc = (_FOLLOW.maxFailsPerRoomByAccount && typeof _FOLLOW.maxFailsPerRoomByAccount==='object') ? _FOLLOW.maxFailsPerRoomByAccount : {};
+// ⚠ 用 ACCOUNT 而不是 ACCOUNT_TAG：后者在 282 行才定义，此处直接引用会触发 TDZ
+const _failsOverride = Number(_failsByAcc[ACCOUNT || 'main']);
+const FOLLOW_MAX_FAILS = (_failsOverride > 0)
+  ? Math.max(1, Math.min(20, _failsOverride))
+  : Math.max(0, Math.min(20, Number(_FOLLOW.maxFailsPerRoom) || 3));
 // 🎯 2026-11-10 11:22 用户定稿「main3 只做探测，也可以抢福袋，不用关注，但不抢粉丝团福袋」：
 //    背景：main3 的网页端关注写操作被服务端临时限制（昨天 03:51~06:51 曾 9 次成功，
 //    今天 0 次），所有关注型福袋必然 fans-panel 拦截白耗巡房时间（实测 11/12 次）。
