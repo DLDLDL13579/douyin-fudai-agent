@@ -169,8 +169,62 @@ const DANMU_MAX_PER_WAIT=Math.max(1,Math.min(20,Number(_DANMU.maxPerWait)||8));
 // 文案白名单：过滤空串、过长内容，以及任何可能被开奖检测正则误判的词。
 //    开奖检测判据见守候循环：/恭喜|中奖|获奖|获得.*奖|奖品|未中奖|很遗憾|没抽中|送你一个好运/
 const DANMU_BAD=/恭喜|中奖|获奖|获得.{0,8}(奖|福袋|红包|礼)|奖品|已发放|已放入|背包|未中奖|没有中奖|很遗憾|没抽中|送你一个好运|下次再来|再接再厉/;
-const DANMU_TEXTS=(Array.isArray(_DANMU.texts)?_DANMU.texts:[])
-  .map(s=>String(s||'').trim()).filter(s=>s.length>0&&s.length<=20&&!DANMU_BAD.test(s));
+  const _cleanTexts=(arr)=>(Array.isArray(arr)?arr:[])
+    .map(s=>String(s||'').trim()).filter(s=>s.length>0&&s.length<=20&&!DANMU_BAD.test(s));
+  const DANMU_TEXTS=_cleanTexts(_DANMU.texts);
+  // 💬 2026-11-11 11:37 用户「弹幕太像人机」→ 全面拟人化，全部参数单一数据源。
+  //    按直播间标题/主播名/页面文本推断类型，从对应文案池挑没发过的句子；
+  //    分类与关键词都在 data/danmu-config.json，代码只读、不内置任何文案。
+  //    ⚠ pickDanmuCategory 是函数声明，虽在 const ev(437行) 之前，但只在守候循环
+  //      运行时才被调用，不会触发 TDZ。
+  const DANMU_CATS=(Array.isArray(_DANMU.categories)?_DANMU.categories:[])
+    .map(c=>({name:String(c.name||''),kw:(Array.isArray(c.kw)?c.kw:[]).map(String),texts:_cleanTexts(c.texts)}))
+    .filter(c=>c.kw.length&&c.texts.length);
+  const DANMU_SKIP=Math.max(0,Math.min(0.9,Number(_DANMU.skipChance)||0));
+  const DANMU_TYPING=!!_DANMU.typingEnabled;
+  const _typ=Array.isArray(_DANMU.typingMsPerChar)?_DANMU.typingMsPerChar:[70,190];
+  const DANMU_TYPE_MIN=Math.max(20,Math.min(400,Number(_typ[0])||70));
+  const DANMU_TYPE_MAX=Math.max(DANMU_TYPE_MIN,Math.min(600,Number(_typ[1])||190));
+  // 同房间已发过的句子（进程内即可，跨重启不必持久化——守候本身也是新的一轮）
+  const _danmuSentByRoom=new Map();
+
+  /** 从页面推断直播类型，命中关键词最多的分类胜出；全不中返回 null 走通用兜底。 */
+  async function pickDanmuCategory(tab){
+    try{
+      const raw=await ev(tab,`(()=>{
+        var t=(document.title||'').replace(/的抖音直播间.*$/,'');
+        var m=(document.querySelector('meta[name="description"]')||{}).content||'';
+        var b=(document.body&&document.body.innerText||'').slice(0,260);
+        return JSON.stringify({s:(t+' '+m+' '+b).slice(0,600)});
+      })()`,10000);
+      let s=''; try{ s=JSON.parse(raw||'{}').s||''; }catch(e){}
+      if(!s) return null;
+      let best=null,bestN=0;
+      for(const c of DANMU_CATS){
+        let n=0; for(const k of c.kw){ if(k && s.includes(k)) n++; }
+        if(n>bestN){ bestN=n; best=c; }
+      }
+      return bestN>0?best:null;
+    }catch(e){ return null; }
+  }
+
+  /** 挑一句本房间没发过的：优先分类池，用尽后退回通用池，全用尽返回 null（本轮不再发）。*/
+  function pickDanmuText(room, cat){
+    const used=_danmuSentByRoom.get(String(room))||new Set();
+    const pick=(pool)=>{
+      const avail=pool.filter(t=>!used.has(t));
+      if(!avail.length) return null;
+      return avail[Math.floor(Math.random()*avail.length)];
+    };
+    const t=(cat&&pick(cat.texts))||pick(DANMU_TEXTS);
+    if(t){
+      used.add(t);
+      // 只留最近 40 条，避免长跑内存无限涨
+      if(used.size>40) used.delete(used.values().next().value);
+      _danmuSentByRoom.set(String(room),used);
+    }
+    return t;
+  }
 function getMinOnline(){
   const h=new Date().getHours();
   // 晚间 19:00-24:00 用高门槛，凌晨 0-6 点按白天算（人少但仍在播）
@@ -476,21 +530,46 @@ async function sendDanmu(tab, room, text){
     // 聚焦 → 输入 → 校验文本确实进入编辑器
     await clickXY(tab, g.x, g.y);
     await sleep(250);
-    await tab.cdp.send('Input.insertText',{text},10000);
+    // 💬 2026-11-11 11:37 拟人化：原来 Input.insertText 一次性把整句灌进输入框，
+    //    页面观测到的就是「瞬间出现一整句」，和真人逐字打字差别明显。
+    //    改为逐字 Input.insertText + 每字随机停顿（DANMU_TYPING 可一键退回整段注入）。
+    //    ⚠ 用 insertText 而非 dispatchKeyEvent：中文字符靠 IME 组合事件才能进
+    //      contenteditable，逐条 keyDown 会丢字；insertText 每个字都真实触发 input 事件。
+    if(DANMU_TYPING){
+      for(const ch of text){
+        await tab.cdp.send('Input.insertText',{text:ch},10000);
+        await sleep(DANMU_TYPE_MIN+Math.floor(Math.random()*(DANMU_TYPE_MAX-DANMU_TYPE_MIN+1)));
+      }
+    }else{
+      await tab.cdp.send('Input.insertText',{text},10000);
+    }
     await sleep(350);
     const typed=await ev(tab,`(()=>{
       var ed=document.querySelector('[contenteditable="true"],textarea');
       return JSON.stringify({t:ed?(ed.innerText||''):''});
     })()`,10000);
     let tv=''; try{ tv=JSON.parse(typed||'{}').t||''; }catch(e){}
-    if(!tv.includes(text)){
-      // 文本没进编辑器：按 Esc 清理，绝不按 Enter（避免误发其它内容）
+     if(!tv.includes(text)){
+      // 文本没进编辑器：清干净输入框，绝不按 Enter（避免误发其它内容）。
+      //    ⚠ 2026-11-11 11:50 实测：仅发 Esc / Ctrl+A+Backspace 的 keyDown/keyUp
+      //      对抖音 contenteditable 清不掉残留（输入框仍留着半句）。逐字输入后
+      //      一旦校验失败，残留会污染下一次发送甚至被误发出去。
+      //      改用 execCommand 全选删除 + 清空 DOM + 派发 input 事件让 React 同步。
       try{
         await tab.cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},8000);
         await tab.cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27},8000);
+        await ev(tab,`(()=>{
+          var ed=document.querySelector('[contenteditable="true"],textarea');
+          if(!ed) return 0;
+          ed.focus();
+          try{ document.execCommand('selectAll',false,null); document.execCommand('delete',false,null); }catch(e){}
+          if(ed.tagName==='TEXTAREA') ed.value=''; else ed.innerHTML='';
+          try{ ed.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'deleteContentBackward',data:null})); }catch(e){}
+          return 1;
+        })()`,8000);
       }catch(e){}
       return {sent:false,why:'text-not-typed'};
-    }
+     }
     // 发送：优先点「发送」按钮，扫不到就按 Enter（实测抖音无独立发送按钮）
     const btn=await ev(tab,`(()=>{
       for(const el of document.querySelectorAll('button,div,span')){
@@ -2903,19 +2982,37 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
                 ? Math.min(DRAW_MAX,secLeft+DRAW_BUF) : DRAW_FALLBACK;
               const waitLoops=Math.max(24,Math.ceil(waitSec/5));
               log(`  守候开奖 ${waitLoops*5}s（福袋剩余 ${secLeft}s，冗余 ${DRAW_BUF}s）`);
-              // 💬 弹幕调度：每次守候开奖重新起算，60~90 秒随机抖动，单次最多 maxPerWait 条。
-              //    用「累计等待秒数」判断，不额外引入定时器；弹幕只在开奖检测之前发，
-              //    一旦本轮检出开奖弹窗立即 break，弹幕也就自然停止。
-              let _danmuDue=60+Math.floor(Math.random()*31);
+              // 💬 弹幕调度（2026-11-11 11:37 拟人化，用户「太像人机」后定稿）。
+              //    旧版固定 60~90 秒准点从 8 个通用短句里纯随机抽，同房间反复发同一个词、
+              //    整段瞬间灌入，一眼机器人。现在四点改法：
+              //      ① 首次延迟与间隔都按配置的 min/max 随机，不再写死 60 秒起；
+              //      ② 到期点按 skipChance 概率跳过——真人不会每个间隔都准点说话；
+              //      ③ 按直播间类型挑相关短句，且同房间发过的不再重复（_danmuSentByRoom）；
+              //      ④ 文案池用尽就停发本轮，不硬凑。
+              //    仍只在开奖检测之前发、检出弹窗立即 break，弹幕随之自然停止。
+              let _danmuDue=DANMU_MIN+Math.floor(Math.random()*(DANMU_MAX-DANMU_MIN+1));
               let _danmuCount=0;
+              let _danmuCat=null, _danmuCatPicked=false, _danmuExhausted=false;
               for(let i=0;i<waitLoops;i++){
                 // 先发弹幕再检测开奖：文案已过滤开奖关键词，实测不会触发误判
                 const _elapsed=(i+1)*5;
-                if(DANMU_ENABLED && DANMU_FOR_THIS && _danmuCount<DANMU_MAX_PER_WAIT
-                   && _elapsed>=_danmuDue){
-                  const _txt=DANMU_TEXTS[Math.floor(Math.random()*DANMU_TEXTS.length)];
-                  const _d=await sendDanmu(tab,g.room,_txt);
-                  if(_d.sent) _danmuCount++;
+                if(DANMU_ENABLED && DANMU_FOR_THIS && !_danmuExhausted
+                   && _danmuCount<DANMU_MAX_PER_WAIT && _elapsed>=_danmuDue){
+                  if(Math.random()<DANMU_SKIP){
+                    log(`  💬 弹幕到期但跳过（拟人节奏，skipChance=${DANMU_SKIP}）`);
+                  }else{
+                    // 分类每轮守候只推断一次，避免每 5 秒都发一次 CDP 求值
+                    if(!_danmuCatPicked){ _danmuCatPicked=true; _danmuCat=await pickDanmuCategory(tab); }
+                    const _txt=pickDanmuText(g.room,_danmuCat);
+                    if(_txt){
+                      const _catTag=_danmuCat?_danmuCat.name:'通用';
+                      const _d=await sendDanmu(tab,g.room,_txt);
+                      if(_d.sent){ _danmuCount++; log(`  💬 弹幕类型: ${_catTag}`); }
+                    }else{
+                      _danmuExhausted=true;
+                      log(`  💬 该房间文案已用尽，本轮不再发弹幕`);
+                    }
+                  }
                   _danmuDue=_elapsed+DANMU_MIN+Math.floor(Math.random()*(DANMU_MAX-DANMU_MIN+1));
                 }
                 await sleep(5000);
