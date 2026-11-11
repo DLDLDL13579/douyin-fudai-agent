@@ -2644,3 +2644,63 @@ main3 的关注型福袋继续跳过，记录进 `accounts/main3/work/should-fol
 
 同房间双账号对照是本次唯一有效的方法：单看 main3 会误判成账号问题或代码问题，
 只有主号在同一房间同一操作下成功，才能把范围锁死在「会话差异」。
+
+## 2026-11-11 13:18：改守护脚本必须重启守护进程（否则改动从未生效）
+
+13:16 巡检做「新功能长跑专项」时查出：今天提交的 4 项配置刷新逻辑里，
+有 2 项**从未真正运行过**。
+
+### 症状与根因
+
+`data/auto-blacklist.json` 的 mtime 停在 09:42（是我手动生成的时刻），
+`data/following-cache.json` 停在 11:02、距巡检 134 分钟。
+而 `scripts/health-guard.sh` 里明明写了「每 30 分钟重新学习」「每 20 分钟刷新缓存」。
+
+查进程发现：
+
+```
+PID 54207  ELAPSED 20:30:04  bash scripts/health-guard.sh
+```
+
+**health-guard 是 20 小时前启动的旧进程，一直用旧代码在跑。**
+`while true` 守护不会自动重新加载脚本文件；`run-h35.sh` 同理，
+但 hunter35 在每次 supervisor 重启时会重读，health-guard 没有这个机制。
+
+### 修复与验证（部署 + 实测，不是只看语法）
+
+按锁内 PID 精确停止，不 `pkill`：
+
+```bash
+OLD=$(cat /tmp/fudai-health-guard.lock.d/pid)
+kill "$OLD"; sleep 2; kill -9 "$OLD" 2>/dev/null
+rm -rf /tmp/fudai-health-guard.lock.d
+nohup bash "$PWD/scripts/health-guard.sh" >> "$PWD/douyin-auto/health-guard-boot.log" 2>&1 < /dev/null &
+```
+
+新进程首轮即打印 `13:18:26 🔄 关注名单缓存已 8182s 未更新，开始刷新`，
+旧进程 20 小时里从未打过这行。再人为把黑名单 mtime 回拨 31 分钟模拟到期，
+下一轮 `13:23:50 🧠 重新学习黑名单/时段画像` 自动触发，产物 mtime 同步更新。
+两段新逻辑均确认为「真实自动运行」，双实例与端口全程未受影响。
+
+### 铁律
+
+**改 `scripts/health-guard.sh` / `scripts/runtime-cleaner.sh` /
+`scripts/run-cache-cleaner.sh` 等任何 while-true 守护脚本后，
+必须按各自锁文件内的 PID 精确重启该守护，不能只提交代码。**
+
+| 守护 | 锁 |
+|:---|:---|
+| `health-guard.sh` | `/tmp/fudai-health-guard.lock.d/pid` |
+| `runtime-cleaner.sh` | `/tmp/fudai-runtime-cleaner.lock` |
+| `run-cache-cleaner.sh` | `/tmp/fudai-cache-cleaner.lock` |
+
+判据不是「脚本里有这段逻辑」，也不是「提交成功」，而是**日志里出现该逻辑
+自动触发的那一行 + 产物 mtime 被自动更新**。这与 11-07 截图清理死代码
+是同一类病：周期逻辑写在永不重新加载的长跑进程里。
+
+### 顺带纠正的统计口径错误
+
+13:17 曾报「弹幕有重复」，是**全局**统计了所有房间的文案；
+而 `pickDanmuText` 的去重是按**房间**做的（`_danmuSentByRoom`）。
+按房间分组复核后同房间 0 重复，去重功能正常。
+**判定「去重是否生效」必须按去重 key 分组，不能用全局计数。**
