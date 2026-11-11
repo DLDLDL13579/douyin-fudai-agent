@@ -1,0 +1,3281 @@
+{
+ "generatedAt": "2026-11-11T01:42:12.092Z",
+ "note": "自动生成，勿手改。hours 是该房间历史上发过福袋的小时，hunter 按其±1判断是否值得探测",
+ "total": 260,
+ "rooms": {
+  "209309564": {
+   "host": "",
+   "fudaiTotal": 2,
+   "joinable": 2,
+   "hours": [
+    1,
+    15
+   ],
+   "hourly": {
+    "1": 1,
+    "15": 1
+   }
+  },
+  "3010151431": {
+   "host": "",
+   "fudaiTotal": 6,
+   "joinable": 2,
+   "hours": [
+    16,
+    17,
+    18
+   ],
+   "hourly": {
+    "16": 2,
+    "17": 1,
+    "18": 3
+   }
+  },
+  "159127640301": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    14
+   ],
+   "hourly": {
+    "14": 1
+   }
+  },
+  "917150871967": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    14
+   ],
+   "hourly": {
+    "14": 1
+   }
+  },
+  "779264779954": {
+   "host": "菠萝赛东",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    14
+   ],
+   "hourly": {
+    "14": 1
+   }
+  },
+  "52474234442": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    14
+   ],
+   "hourly": {
+    "14": 1
+   }
+  },
+  "458599614630": {
+   "host": "重楼（观察魔尊016）",
+   "fudaiTotal": 6,
+   "joinable": 2,
+   "hours": [
+    9,
+    14
+   ],
+   "hourly": {
+    "9": 4,
+    "14": 2
+   }
+  },
+  "725737828202": {
+   "host": "天霸铁盒（三角洲行动）",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    14
+   ],
+   "hourly": {
+    "14": 1
+   }
+  },
+  "312978767860": {
+   "host": "",
+   "fudaiTotal": 4,
+   "joinable": 2,
+   "hours": [
+    15,
+    17
+   ],
+   "hourly": {
+    "15": 3,
+    "17": 1
+   }
+  },
+  "962565925628": {
+   "host": "",
+   "fudaiTotal": 3,
+   "joinable": 1,
+   "hours": [
+    15
+   ],
+   "hourly": {
+    "15": 3
+   }
+  },
+  "141559866040": {
+   "host": "呆妹儿小霸王",
+   "fudaiTotal": 3,
+   "joinable": 0,
+   "hours": [
+    15,
+    16,
+    17
+   ],
+   "hourly": {
+    "15": 1,
+    "16": 1,
+    "17": 1
+   }
+  },
+  "487339437861": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    17
+   ],
+   "hourly": {
+    "17": 1
+   }
+  },
+  "878568136994": {
+   "host": "王浩宇Whys",
+   "fudaiTotal": 6,
+   "joinable": 3,
+   "hours": [
+    18,
+    19,
+    21
+   ],
+   "hourly": {
+    "18": 2,
+    "19": 3,
+    "21": 1
+   }
+  },
+  "37933003538": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    20
+   ],
+   "hourly": {
+    "20": 1
+   }
+  },
+  "46595453118": {
+   "host": "JY戴士⁷⁷⁹⁹（京师宇宙）",
+   "fudaiTotal": 7,
+   "joinable": 6,
+   "hours": [
+    19,
+    20,
+    21,
+    22,
+    23
+   ],
+   "hourly": {
+    "19": 1,
+    "20": 1,
+    "21": 2,
+    "22": 2,
+    "23": 1
+   }
+  },
+  "571401904587": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    21
+   ],
+   "hourly": {
+    "21": 1
+   }
+  },
+  "25950867819": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    21
+   ],
+   "hourly": {
+    "21": 1
+   }
+  },
+  "725644733082": {
+   "host": "",
+   "fudaiTotal": 2,
+   "joinable": 1,
+   "hours": [
+    22,
+    23
+   ],
+   "hourly": {
+    "22": 1,
+    "23": 1
+   }
+  },
+  "660292215268": {
+   "host": "旭旭宝宝",
+   "fudaiTotal": 43,
+   "joinable": 15,
+   "hours": [
+    21,
+    22,
+    23
+   ],
+   "hourly": {
+    "21": 12,
+    "22": 26,
+    "23": 5
+   }
+  },
+  "16015225873": {
+   "host": "",
+   "fudaiTotal": 9,
+   "joinable": 2,
+   "hours": [
+    0,
+    1
+   ],
+   "hourly": {
+    "0": 2,
+    "1": 7
+   }
+  },
+  "354892492946": {
+   "host": "锦一电台",
+   "fudaiTotal": 84,
+   "joinable": 68,
+   "hours": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    23
+   ],
+   "hourly": {
+    "0": 7,
+    "1": 8,
+    "2": 18,
+    "3": 10,
+    "4": 15,
+    "5": 16,
+    "6": 8,
+    "23": 2
+   }
+  },
+  "416921329528": {
+   "host": "[VIP]",
+   "fudaiTotal": 2,
+   "joinable": 2,
+   "hours": [
+    10
+   ],
+   "hourly": {
+    "10": 2
+   }
+  },
+  "359765653648": {
+   "host": "yjjimpaopao",
+   "fudaiTotal": 28,
+   "joinable": 14,
+   "hours": [
+    11,
+    12,
+    13,
+    14
+   ],
+   "hourly": {
+    "11": 4,
+    "12": 11,
+    "13": 8,
+    "14": 5
+   }
+  },
+  "564078693536": {
+   "host": "新光(三角洲行动)",
+   "fudaiTotal": 3,
+   "joinable": 2,
+   "hours": [
+    11,
+    12
+   ],
+   "hourly": {
+    "11": 2,
+    "12": 1
+   }
+  },
+  "599924195541": {
+   "host": "冯皓律师",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    16
+   ],
+   "hourly": {
+    "16": 2
+   }
+  },
+  "138846075929": {
+   "host": "阿伟走山村",
+   "fudaiTotal": 11,
+   "joinable": 3,
+   "hours": [
+    16,
+    17
+   ],
+   "hourly": {
+    "16": 3,
+    "17": 8
+   }
+  },
+  "260141232541": {
+   "host": "王小欠",
+   "fudaiTotal": 15,
+   "joinable": 8,
+   "hours": [
+    17,
+    18
+   ],
+   "hourly": {
+    "17": 14,
+    "18": 1
+   }
+  },
+  "321606587218": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    8
+   ],
+   "hourly": {
+    "8": 1
+   }
+  },
+  "836746964460": {
+   "host": "刘嘉豪闯世界",
+   "fudaiTotal": 2,
+   "joinable": 1,
+   "hours": [
+    17,
+    18
+   ],
+   "hourly": {
+    "17": 1,
+    "18": 1
+   }
+  },
+  "165131894031": {
+   "host": "小骏走乡村",
+   "fudaiTotal": 3,
+   "joinable": 3,
+   "hours": [
+    16,
+    17
+   ],
+   "hourly": {
+    "16": 1,
+    "17": 2
+   }
+  },
+  "341619001773": {
+   "host": "高宇航『九方骏』",
+   "fudaiTotal": 48,
+   "joinable": 43,
+   "hours": [
+    10,
+    11,
+    12,
+    17,
+    18,
+    19
+   ],
+   "hourly": {
+    "10": 13,
+    "11": 17,
+    "12": 3,
+    "17": 7,
+    "18": 7,
+    "19": 1
+   }
+  },
+  "920862546527": {
+   "host": "",
+   "fudaiTotal": 6,
+   "joinable": 2,
+   "hours": [
+    7,
+    18
+   ],
+   "hourly": {
+    "7": 4,
+    "18": 2
+   }
+  },
+  "570740063545": {
+   "host": "浩子【1023】",
+   "fudaiTotal": 11,
+   "joinable": 2,
+   "hours": [
+    19,
+    21
+   ],
+   "hourly": {
+    "19": 9,
+    "21": 2
+   }
+  },
+  "645268872452": {
+   "host": "昊天（三角洲行动）",
+   "fudaiTotal": 27,
+   "joinable": 26,
+   "hours": [
+    19,
+    20,
+    21,
+    22
+   ],
+   "hourly": {
+    "19": 3,
+    "20": 7,
+    "21": 6,
+    "22": 11
+   }
+  },
+  "705186240335": {
+   "host": "小邵闯地球",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    19
+   ],
+   "hourly": {
+    "19": 2
+   }
+  },
+  "66186758468": {
+   "host": "千年（万牢之主）",
+   "fudaiTotal": 6,
+   "joinable": 5,
+   "hours": [
+    19,
+    21
+   ],
+   "hourly": {
+    "19": 4,
+    "21": 2
+   }
+  },
+  "yeziyYX": {
+   "host": "",
+   "fudaiTotal": 27,
+   "joinable": 12,
+   "hours": [
+    21,
+    22,
+    23
+   ],
+   "hourly": {
+    "21": 8,
+    "22": 18,
+    "23": 1
+   }
+  },
+  "xiaoqingrou3": {
+   "host": "",
+   "fudaiTotal": 2,
+   "joinable": 2,
+   "hours": [
+    0,
+    1
+   ],
+   "hourly": {
+    "0": 1,
+    "1": 1
+   }
+  },
+  "604512334242": {
+   "host": "钟哥过场多",
+   "fudaiTotal": 65,
+   "joinable": 52,
+   "hours": [
+    19,
+    20,
+    21
+   ],
+   "hourly": {
+    "19": 5,
+    "20": 31,
+    "21": 29
+   }
+  },
+  "994268318607": {
+   "host": "郭少杰🕊️笑看人间",
+   "fudaiTotal": 6,
+   "joinable": 0,
+   "hours": [
+    18,
+    19
+   ],
+   "hourly": {
+    "18": 1,
+    "19": 5
+   }
+  },
+  "75274859148": {
+   "host": "活力哥有氧健身",
+   "fudaiTotal": 12,
+   "joinable": 2,
+   "hours": [
+    8,
+    9
+   ],
+   "hourly": {
+    "8": 7,
+    "9": 5
+   }
+  },
+  "98959059988": {
+   "host": "南宫嘉骏｜每晚18:30信阳木机厂户外",
+   "fudaiTotal": 7,
+   "joinable": 5,
+   "hours": [
+    19,
+    20
+   ],
+   "hourly": {
+    "19": 5,
+    "20": 2
+   }
+  },
+  "467556348389": {
+   "host": "静静减脂塑形运动",
+   "fudaiTotal": 8,
+   "joinable": 7,
+   "hours": [
+    15,
+    16,
+    20
+   ],
+   "hourly": {
+    "15": 2,
+    "16": 1,
+    "20": 5
+   }
+  },
+  "980375097435": {
+   "host": "海洋1625",
+   "fudaiTotal": 2,
+   "joinable": 2,
+   "hours": [
+    18,
+    22
+   ],
+   "hourly": {
+    "18": 1,
+    "22": 1
+   }
+  },
+  "keyis153": {
+   "host": "",
+   "fudaiTotal": 43,
+   "joinable": 27,
+   "hours": [
+    0,
+    1,
+    22,
+    23
+   ],
+   "hourly": {
+    "0": 13,
+    "1": 1,
+    "22": 9,
+    "23": 20
+   }
+  },
+  "55808577187": {
+   "host": "",
+   "fudaiTotal": 4,
+   "joinable": 4,
+   "hours": [
+    0,
+    13,
+    21,
+    22
+   ],
+   "hourly": {
+    "0": 1,
+    "13": 1,
+    "21": 1,
+    "22": 1
+   }
+  },
+  "523761500484": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    2
+   ],
+   "hourly": {
+    "2": 1
+   }
+  },
+  "312239546239": {
+   "host": "阳凡养生瘦身操【早课】水",
+   "fudaiTotal": 30,
+   "joinable": 25,
+   "hours": [
+    6,
+    7
+   ],
+   "hourly": {
+    "6": 17,
+    "7": 13
+   }
+  },
+  "76892461348": {
+   "host": "范承泽",
+   "fudaiTotal": 18,
+   "joinable": 1,
+   "hours": [
+    6
+   ],
+   "hourly": {
+    "6": 18
+   }
+  },
+  "150492240686": {
+   "host": "韦朵朵¹¹⁰⁵一起看海鸥",
+   "fudaiTotal": 6,
+   "joinable": 1,
+   "hours": [
+    7,
+    8,
+    17
+   ],
+   "hourly": {
+    "7": 1,
+    "8": 2,
+    "17": 3
+   }
+  },
+  "57055718548": {
+   "host": "陈重磊律师",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    8
+   ],
+   "hourly": {
+    "8": 1
+   }
+  },
+  "692399880748": {
+   "host": "说事儿",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    8
+   ],
+   "hourly": {
+    "8": 1
+   }
+  },
+  "356620014538": {
+   "host": "",
+   "fudaiTotal": 7,
+   "joinable": 5,
+   "hours": [
+    8,
+    9,
+    10
+   ],
+   "hourly": {
+    "8": 3,
+    "9": 1,
+    "10": 3
+   }
+  },
+  "6096197105": {
+   "host": "Gus",
+   "fudaiTotal": 13,
+   "joinable": 5,
+   "hours": [
+    9,
+    10,
+    11,
+    12,
+    18
+   ],
+   "hourly": {
+    "9": 1,
+    "10": 2,
+    "11": 3,
+    "12": 6,
+    "18": 1
+   }
+  },
+  "633986383480": {
+   "host": "",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    10,
+    11
+   ],
+   "hourly": {
+    "10": 1,
+    "11": 1
+   }
+  },
+  "77217772750": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    12
+   ],
+   "hourly": {
+    "12": 1
+   }
+  },
+  "761605494343": {
+   "host": "西游群英荟",
+   "fudaiTotal": 4,
+   "joinable": 1,
+   "hours": [
+    11,
+    12,
+    13
+   ],
+   "hourly": {
+    "11": 1,
+    "12": 1,
+    "13": 2
+   }
+  },
+  "421527298234": {
+   "host": "骚男🤡",
+   "fudaiTotal": 29,
+   "joinable": 25,
+   "hours": [
+    11,
+    12
+   ],
+   "hourly": {
+    "11": 11,
+    "12": 18
+   }
+  },
+  "694562812381": {
+   "host": "imxiaoxin",
+   "fudaiTotal": 39,
+   "joinable": 13,
+   "hours": [
+    12,
+    13,
+    14,
+    17,
+    18
+   ],
+   "hourly": {
+    "12": 12,
+    "13": 12,
+    "14": 10,
+    "17": 1,
+    "18": 4
+   }
+  },
+  "544590831076": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    12
+   ],
+   "hourly": {
+    "12": 1
+   }
+  },
+  "712289279749": {
+   "host": "",
+   "fudaiTotal": 4,
+   "joinable": 4,
+   "hours": [
+    12,
+    13
+   ],
+   "hourly": {
+    "12": 3,
+    "13": 1
+   }
+  },
+  "665194777517": {
+   "host": "",
+   "fudaiTotal": 6,
+   "joinable": 2,
+   "hours": [
+    14,
+    15
+   ],
+   "hourly": {
+    "14": 3,
+    "15": 3
+   }
+  },
+  "185458602012": {
+   "host": "老魅魔（三角洲行动）",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    16
+   ],
+   "hourly": {
+    "16": 1
+   }
+  },
+  "725504045845": {
+   "host": "真名有雪",
+   "fudaiTotal": 9,
+   "joinable": 9,
+   "hours": [
+    16,
+    17
+   ],
+   "hourly": {
+    "16": 8,
+    "17": 1
+   }
+  },
+  "580802153205": {
+   "host": "向北pubg",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    16
+   ],
+   "hourly": {
+    "16": 1
+   }
+  },
+  "88053416355": {
+   "host": "土豆进村（新号）",
+   "fudaiTotal": 27,
+   "joinable": 20,
+   "hours": [
+    10,
+    11,
+    12,
+    16,
+    17,
+    18
+   ],
+   "hourly": {
+    "10": 1,
+    "11": 3,
+    "12": 1,
+    "16": 1,
+    "17": 9,
+    "18": 12
+   }
+  },
+  "964699568705": {
+   "host": "Kami",
+   "fudaiTotal": 4,
+   "joinable": 4,
+   "hours": [
+    17
+   ],
+   "hourly": {
+    "17": 4
+   }
+  },
+  "594976188049": {
+   "host": "不会捏蓝(东东电竞)",
+   "fudaiTotal": 5,
+   "joinable": 2,
+   "hours": [
+    13,
+    14,
+    16,
+    17,
+    18
+   ],
+   "hourly": {
+    "13": 1,
+    "14": 1,
+    "16": 1,
+    "17": 1,
+    "18": 1
+   }
+  },
+  "564028334698": {
+   "host": "",
+   "fudaiTotal": 2,
+   "joinable": 2,
+   "hours": [
+    18,
+    19
+   ],
+   "hourly": {
+    "18": 1,
+    "19": 1
+   }
+  },
+  "24303699638": {
+   "host": "逗你玩剧组🎬贱哥",
+   "fudaiTotal": 7,
+   "joinable": 4,
+   "hours": [
+    19,
+    20,
+    21
+   ],
+   "hourly": {
+    "19": 5,
+    "20": 1,
+    "21": 1
+   }
+  },
+  "63168376612": {
+   "host": "金美希🌞⁹⁰³ （每晚18：30）",
+   "fudaiTotal": 3,
+   "joinable": 3,
+   "hours": [
+    19,
+    20
+   ],
+   "hourly": {
+    "19": 2,
+    "20": 1
+   }
+  },
+  "59648729787": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    20
+   ],
+   "hourly": {
+    "20": 1
+   }
+  },
+  "dehua66888": {
+   "host": "",
+   "fudaiTotal": 11,
+   "joinable": 8,
+   "hours": [
+    20,
+    21
+   ],
+   "hourly": {
+    "20": 4,
+    "21": 7
+   }
+  },
+  "794830636786": {
+   "host": "四姐文化传媒日常号",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    20
+   ],
+   "hourly": {
+    "20": 1
+   }
+  },
+  "42075947470": {
+   "host": "吕德华",
+   "fudaiTotal": 2,
+   "joinable": 1,
+   "hours": [
+    20,
+    21
+   ],
+   "hourly": {
+    "20": 1,
+    "21": 1
+   }
+  },
+  "471576972164": {
+   "host": "上官带刀",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    20
+   ],
+   "hourly": {
+    "20": 1
+   }
+  },
+  "252280097841": {
+   "host": "大司马解说",
+   "fudaiTotal": 10,
+   "joinable": 7,
+   "hours": [
+    19,
+    20,
+    21
+   ],
+   "hourly": {
+    "19": 4,
+    "20": 1,
+    "21": 5
+   }
+  },
+  "renyixu1989": {
+   "host": "",
+   "fudaiTotal": 3,
+   "joinable": 0,
+   "hours": [
+    22
+   ],
+   "hourly": {
+    "22": 3
+   }
+  },
+  "557481980778": {
+   "host": "HangHang",
+   "fudaiTotal": 106,
+   "joinable": 97,
+   "hours": [
+    0,
+    1,
+    22,
+    23
+   ],
+   "hourly": {
+    "0": 32,
+    "1": 29,
+    "22": 11,
+    "23": 34
+   }
+  },
+  "21349991875": {
+   "host": "小黑孩Pro 笑点文化",
+   "fudaiTotal": 17,
+   "joinable": 13,
+   "hours": [
+    22,
+    23
+   ],
+   "hourly": {
+    "22": 7,
+    "23": 10
+   }
+  },
+  "504448096643": {
+   "host": "林树（三角洲行动）",
+   "fudaiTotal": 6,
+   "joinable": 5,
+   "hours": [
+    0,
+    2,
+    21,
+    22,
+    23
+   ],
+   "hourly": {
+    "0": 1,
+    "2": 1,
+    "21": 1,
+    "22": 2,
+    "23": 1
+   }
+  },
+  "660788631930": {
+   "host": "小正（国服马超）",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    0
+   ],
+   "hourly": {
+    "0": 1
+   }
+  },
+  "918264565040": {
+   "host": "东营初九",
+   "fudaiTotal": 5,
+   "joinable": 3,
+   "hours": [
+    1,
+    2,
+    3
+   ],
+   "hourly": {
+    "1": 1,
+    "2": 3,
+    "3": 1
+   }
+  },
+  "497859699406": {
+   "host": "YM不晚 担保",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    2
+   ],
+   "hourly": {
+    "2": 1
+   }
+  },
+  "710288429310": {
+   "host": "不梨谱电竞",
+   "fudaiTotal": 4,
+   "joinable": 2,
+   "hours": [
+    2,
+    3
+   ],
+   "hourly": {
+    "2": 3,
+    "3": 1
+   }
+  },
+  "98482161550": {
+   "host": "青珂",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    6
+   ],
+   "hourly": {
+    "6": 1
+   }
+  },
+  "688292233649": {
+   "host": "莫拉塔（无畏契约）双重人格",
+   "fudaiTotal": 5,
+   "joinable": 0,
+   "hours": [
+    0,
+    1,
+    2,
+    3
+   ],
+   "hourly": {
+    "0": 1,
+    "1": 2,
+    "2": 1,
+    "3": 1
+   }
+  },
+  "394260640881": {
+   "host": "Mentality桃",
+   "fudaiTotal": 25,
+   "joinable": 12,
+   "hours": [
+    2,
+    3,
+    4,
+    5
+   ],
+   "hourly": {
+    "2": 3,
+    "3": 13,
+    "4": 5,
+    "5": 4
+   }
+  },
+  "403593241280": {
+   "host": "潇洒哥（无畏契约）",
+   "fudaiTotal": 32,
+   "joinable": 21,
+   "hours": [
+    1,
+    2,
+    3,
+    4
+   ],
+   "hourly": {
+    "1": 1,
+    "2": 12,
+    "3": 13,
+    "4": 6
+   }
+  },
+  "339552658626": {
+   "host": "雪域🎤任运和朋友们",
+   "fudaiTotal": 13,
+   "joinable": 7,
+   "hours": [
+    4,
+    5
+   ],
+   "hourly": {
+    "4": 7,
+    "5": 6
+   }
+  },
+  "373455526113": {
+   "host": "鲁易情感聆听",
+   "fudaiTotal": 19,
+   "joinable": 18,
+   "hours": [
+    3,
+    4,
+    5,
+    6,
+    7
+   ],
+   "hourly": {
+    "3": 2,
+    "4": 5,
+    "5": 5,
+    "6": 4,
+    "7": 3
+   }
+  },
+  "722167467158": {
+   "host": "轩的",
+   "fudaiTotal": 2,
+   "joinable": 2,
+   "hours": [
+    5,
+    6
+   ],
+   "hourly": {
+    "5": 1,
+    "6": 1
+   }
+  },
+  "782997033517": {
+   "host": "",
+   "fudaiTotal": 7,
+   "joinable": 7,
+   "hours": [
+    5,
+    7,
+    8
+   ],
+   "hourly": {
+    "5": 1,
+    "7": 5,
+    "8": 1
+   }
+  },
+  "131264639153": {
+   "host": "小农女",
+   "fudaiTotal": 21,
+   "joinable": 20,
+   "hours": [
+    7,
+    8,
+    9
+   ],
+   "hourly": {
+    "7": 6,
+    "8": 13,
+    "9": 2
+   }
+  },
+  "626412696855": {
+   "host": "标哥（团队招人）",
+   "fudaiTotal": 3,
+   "joinable": 2,
+   "hours": [
+    7,
+    8
+   ],
+   "hourly": {
+    "7": 2,
+    "8": 1
+   }
+  },
+  "992731752253": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    8
+   ],
+   "hourly": {
+    "8": 1
+   }
+  },
+  "113907310758": {
+   "host": "小薇古法运动",
+   "fudaiTotal": 18,
+   "joinable": 12,
+   "hours": [
+    9,
+    10
+   ],
+   "hourly": {
+    "9": 7,
+    "10": 11
+   }
+  },
+  "480475220169": {
+   "host": "花满楼（国一李白）",
+   "fudaiTotal": 6,
+   "joinable": 4,
+   "hours": [
+    11
+   ],
+   "hourly": {
+    "11": 6
+   }
+  },
+  "335610475439": {
+   "host": "",
+   "fudaiTotal": 15,
+   "joinable": 15,
+   "hours": [
+    11,
+    12,
+    18
+   ],
+   "hourly": {
+    "11": 3,
+    "12": 9,
+    "18": 3
+   }
+  },
+  "732146168843": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    13
+   ],
+   "hourly": {
+    "13": 1
+   }
+  },
+  "52287020735": {
+   "host": "一乐店长（盼之账号）",
+   "fudaiTotal": 3,
+   "joinable": 2,
+   "hours": [
+    12,
+    13
+   ],
+   "hourly": {
+    "12": 1,
+    "13": 2
+   }
+  },
+  "866596317498": {
+   "host": "",
+   "fudaiTotal": 2,
+   "joinable": 2,
+   "hours": [
+    13,
+    19
+   ],
+   "hourly": {
+    "13": 1,
+    "19": 1
+   }
+  },
+  "812195156626": {
+   "host": "迪士尼在逃公主👸",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    15
+   ],
+   "hourly": {
+    "15": 1
+   }
+  },
+  "654099921539": {
+   "host": "可乐（身法铠）",
+   "fudaiTotal": 4,
+   "joinable": 1,
+   "hours": [
+    13,
+    14
+   ],
+   "hourly": {
+    "13": 3,
+    "14": 1
+   }
+  },
+  "770315493376": {
+   "host": "龙浩天🐲(生活号)",
+   "fudaiTotal": 4,
+   "joinable": 3,
+   "hours": [
+    14
+   ],
+   "hourly": {
+    "14": 4
+   }
+  },
+  "950356885941": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    14
+   ],
+   "hourly": {
+    "14": 1
+   }
+  },
+  "362215320348": {
+   "host": "信阳小米🎤《下午三点开播》",
+   "fudaiTotal": 6,
+   "joinable": 6,
+   "hours": [
+    15,
+    16
+   ],
+   "hourly": {
+    "15": 1,
+    "16": 5
+   }
+  },
+  "132810378938": {
+   "host": "",
+   "fudaiTotal": 3,
+   "joinable": 3,
+   "hours": [
+    16,
+    17
+   ],
+   "hourly": {
+    "16": 1,
+    "17": 2
+   }
+  },
+  "476806339740": {
+   "host": "户外发",
+   "fudaiTotal": 14,
+   "joinable": 10,
+   "hours": [
+    18,
+    19
+   ],
+   "hourly": {
+    "18": 3,
+    "19": 11
+   }
+  },
+  "235840024094": {
+   "host": "王大宝《11月29-30号生日庆》",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    19
+   ],
+   "hourly": {
+    "19": 1
+   }
+  },
+  "71564838536": {
+   "host": "白泽（三角洲行动）",
+   "fudaiTotal": 4,
+   "joinable": 2,
+   "hours": [
+    19,
+    20
+   ],
+   "hourly": {
+    "19": 2,
+    "20": 2
+   }
+  },
+  "136396047381": {
+   "host": "🌟红豆⁵⁰²（每晚7点半等你回家）",
+   "fudaiTotal": 4,
+   "joinable": 4,
+   "hours": [
+    19,
+    20
+   ],
+   "hourly": {
+    "19": 1,
+    "20": 3
+   }
+  },
+  "933711428606": {
+   "host": "金铲铲小叶（阵容王）",
+   "fudaiTotal": 24,
+   "joinable": 14,
+   "hours": [
+    21,
+    22,
+    23
+   ],
+   "hourly": {
+    "21": 5,
+    "22": 14,
+    "23": 5
+   }
+  },
+  "615189692839": {
+   "host": "陈泽",
+   "fudaiTotal": 3,
+   "joinable": 0,
+   "hours": [
+    21,
+    22
+   ],
+   "hourly": {
+    "21": 1,
+    "22": 2
+   }
+  },
+  "785392066244": {
+   "host": "花小龙",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    22
+   ],
+   "hourly": {
+    "22": 1
+   }
+  },
+  "921169302662": {
+   "host": "陈伯(全能王)",
+   "fudaiTotal": 15,
+   "joinable": 11,
+   "hours": [
+    0,
+    1,
+    22,
+    23
+   ],
+   "hourly": {
+    "0": 7,
+    "1": 1,
+    "22": 1,
+    "23": 6
+   }
+  },
+  "480446788139": {
+   "host": "杨雯梓5号中午11点奉节索图大舞台",
+   "fudaiTotal": 2,
+   "joinable": 2,
+   "hours": [
+    11
+   ],
+   "hourly": {
+    "11": 2
+   }
+  },
+  "750138804104": {
+   "host": "贝兒⁵⁹¹⁶",
+   "fudaiTotal": 6,
+   "joinable": 2,
+   "hours": [
+    20,
+    22
+   ],
+   "hourly": {
+    "20": 5,
+    "22": 1
+   }
+  },
+  "680731316331": {
+   "host": "小好",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    0
+   ],
+   "hourly": {
+    "0": 1
+   }
+  },
+  "507939628780": {
+   "host": "王者荣耀有痕（露娜世一秀）",
+   "fudaiTotal": 3,
+   "joinable": 3,
+   "hours": [
+    0,
+    1
+   ],
+   "hourly": {
+    "0": 2,
+    "1": 1
+   }
+  },
+  "955477777498": {
+   "host": "",
+   "fudaiTotal": 2,
+   "joinable": 2,
+   "hours": [
+    2,
+    3
+   ],
+   "hourly": {
+    "2": 1,
+    "3": 1
+   }
+  },
+  "317454775493": {
+   "host": "英雄联盟-猩猩诺手",
+   "fudaiTotal": 3,
+   "joinable": 3,
+   "hours": [
+    1
+   ],
+   "hourly": {
+    "1": 3
+   }
+  },
+  "350971325803": {
+   "host": "",
+   "fudaiTotal": 6,
+   "joinable": 6,
+   "hours": [
+    4,
+    5
+   ],
+   "hourly": {
+    "4": 3,
+    "5": 3
+   }
+  },
+  "407600774076": {
+   "host": "",
+   "fudaiTotal": 4,
+   "joinable": 4,
+   "hours": [
+    2
+   ],
+   "hourly": {
+    "2": 4
+   }
+  },
+  "143040673633": {
+   "host": "",
+   "fudaiTotal": 6,
+   "joinable": 3,
+   "hours": [
+    3,
+    4
+   ],
+   "hourly": {
+    "3": 5,
+    "4": 1
+   }
+  },
+  "429574184448": {
+   "host": "古泉哥（招客服、招助理）",
+   "fudaiTotal": 7,
+   "joinable": 7,
+   "hours": [
+    5,
+    6
+   ],
+   "hourly": {
+    "5": 2,
+    "6": 5
+   }
+  },
+  "862009036544": {
+   "host": "李杰八段锦",
+   "fudaiTotal": 4,
+   "joinable": 0,
+   "hours": [
+    6
+   ],
+   "hourly": {
+    "6": 4
+   }
+  },
+  "88134012935": {
+   "host": "小瑶一家在日本",
+   "fudaiTotal": 2,
+   "joinable": 1,
+   "hours": [
+    6,
+    7
+   ],
+   "hourly": {
+    "6": 1,
+    "7": 1
+   }
+  },
+  "454189034439": {
+   "host": "亮亮有氧健身操",
+   "fudaiTotal": 8,
+   "joinable": 8,
+   "hours": [
+    7,
+    8
+   ],
+   "hourly": {
+    "7": 3,
+    "8": 5
+   }
+  },
+  "625096504608": {
+   "host": "飞燕有氧运动健身",
+   "fudaiTotal": 9,
+   "joinable": 1,
+   "hours": [
+    7,
+    8
+   ],
+   "hourly": {
+    "7": 4,
+    "8": 5
+   }
+  },
+  "493415788549": {
+   "host": "方栎涵",
+   "fudaiTotal": 31,
+   "joinable": 18,
+   "hours": [
+    7,
+    8,
+    9,
+    10,
+    11
+   ],
+   "hourly": {
+    "7": 2,
+    "8": 16,
+    "9": 3,
+    "10": 9,
+    "11": 1
+   }
+  },
+  "834029663590": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    8
+   ],
+   "hourly": {
+    "8": 1
+   }
+  },
+  "170664225650": {
+   "host": "河南大帅（万般努力）",
+   "fudaiTotal": 45,
+   "joinable": 30,
+   "hours": [
+    8,
+    9,
+    10
+   ],
+   "hourly": {
+    "8": 9,
+    "9": 31,
+    "10": 5
+   }
+  },
+  "345662326853": {
+   "host": "天霸一霖（三角洲行动）",
+   "fudaiTotal": 6,
+   "joinable": 5,
+   "hours": [
+    9,
+    14,
+    15
+   ],
+   "hourly": {
+    "9": 3,
+    "14": 1,
+    "15": 2
+   }
+  },
+  "438730146243": {
+   "host": "舒婷生活号✨ ¹²⁰⁶",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    9
+   ],
+   "hourly": {
+    "9": 1
+   }
+  },
+  "723327304015": {
+   "host": "大潘说股",
+   "fudaiTotal": 39,
+   "joinable": 26,
+   "hours": [
+    10,
+    11,
+    13,
+    14
+   ],
+   "hourly": {
+    "10": 14,
+    "11": 6,
+    "13": 10,
+    "14": 9
+   }
+  },
+  "36947836004": {
+   "host": "老白分析室",
+   "fudaiTotal": 4,
+   "joinable": 2,
+   "hours": [
+    9,
+    10
+   ],
+   "hourly": {
+    "9": 3,
+    "10": 1
+   }
+  },
+  "624435409822": {
+   "host": "麻辣小咖妃（冲百万粉）⁶⁶⁸⁸",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    9
+   ],
+   "hourly": {
+    "9": 1
+   }
+  },
+  "973322214270": {
+   "host": "颖姐财经",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    9
+   ],
+   "hourly": {
+    "9": 1
+   }
+  },
+  "730184441361": {
+   "host": "艺术（三角洲行动）",
+   "fudaiTotal": 2,
+   "joinable": 1,
+   "hours": [
+    11
+   ],
+   "hourly": {
+    "11": 2
+   }
+  },
+  "976574695920": {
+   "host": "梦幻老王 （白天11:30播）",
+   "fudaiTotal": 19,
+   "joinable": 7,
+   "hours": [
+    11,
+    12
+   ],
+   "hourly": {
+    "11": 1,
+    "12": 18
+   }
+  },
+  "94192409364": {
+   "host": "王宇昊（三角洲行动）",
+   "fudaiTotal": 24,
+   "joinable": 20,
+   "hours": [
+    1,
+    12,
+    13
+   ],
+   "hourly": {
+    "1": 7,
+    "12": 9,
+    "13": 8
+   }
+  },
+  "646379392926": {
+   "host": "☀️歌小样⁶₂¹",
+   "fudaiTotal": 20,
+   "joinable": 5,
+   "hours": [
+    12,
+    13,
+    14,
+    15,
+    16
+   ],
+   "hourly": {
+    "12": 1,
+    "13": 1,
+    "14": 5,
+    "15": 8,
+    "16": 5
+   }
+  },
+  "143859483338": {
+   "host": "马叉虫（三角洲行动）",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    14
+   ],
+   "hourly": {
+    "14": 1
+   }
+  },
+  "70151903631": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    16
+   ],
+   "hourly": {
+    "16": 1
+   }
+  },
+  "187191694555": {
+   "host": "澜澜",
+   "fudaiTotal": 4,
+   "joinable": 3,
+   "hours": [
+    17
+   ],
+   "hourly": {
+    "17": 4
+   }
+  },
+  "999794481497": {
+   "host": "幻影哥12月8日周年庆",
+   "fudaiTotal": 5,
+   "joinable": 5,
+   "hours": [
+    13,
+    18,
+    19
+   ],
+   "hourly": {
+    "13": 1,
+    "18": 3,
+    "19": 1
+   }
+  },
+  "36991623636": {
+   "host": "志希（天才卤蛋）🍉",
+   "fudaiTotal": 6,
+   "joinable": 4,
+   "hours": [
+    18
+   ],
+   "hourly": {
+    "18": 6
+   }
+  },
+  "221866740529": {
+   "host": "阿怪（秒杀怪卡萨丁）",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    18
+   ],
+   "hourly": {
+    "18": 1
+   }
+  },
+  "313452133924": {
+   "host": "郭有才（5-6号晚7点相约飞马水城）",
+   "fudaiTotal": 4,
+   "joinable": 4,
+   "hours": [
+    19,
+    20
+   ],
+   "hourly": {
+    "19": 3,
+    "20": 1
+   }
+  },
+  "711073115043": {
+   "host": "饱饱",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    0
+   ],
+   "hourly": {
+    "0": 1
+   }
+  },
+  "693156293143": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    2
+   ],
+   "hourly": {
+    "2": 1
+   }
+  },
+  "303441555052": {
+   "host": "张教瘦体重管理",
+   "fudaiTotal": 2,
+   "joinable": 2,
+   "hours": [
+    6
+   ],
+   "hourly": {
+    "6": 2
+   }
+  },
+  "633861604600": {
+   "host": "橙子来啦",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    6
+   ],
+   "hourly": {
+    "6": 1
+   }
+  },
+  "730127423738": {
+   "host": "锋哥说～解忧",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    9
+   ],
+   "hourly": {
+    "9": 1
+   }
+  },
+  "914246177078": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    11
+   ],
+   "hourly": {
+    "11": 1
+   }
+  },
+  "326624872646": {
+   "host": "",
+   "fudaiTotal": 3,
+   "joinable": 3,
+   "hours": [
+    11,
+    13
+   ],
+   "hourly": {
+    "11": 2,
+    "13": 1
+   }
+  },
+  "941373694962": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    12
+   ],
+   "hourly": {
+    "12": 1
+   }
+  },
+  "954422906607": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    13
+   ],
+   "hourly": {
+    "13": 1
+   }
+  },
+  "712334267061": {
+   "host": "格润富德-水上闯关挑战赛",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    13
+   ],
+   "hourly": {
+    "13": 1
+   }
+  },
+  "435217198434": {
+   "host": "小小K",
+   "fudaiTotal": 35,
+   "joinable": 21,
+   "hours": [
+    14,
+    15
+   ],
+   "hourly": {
+    "14": 3,
+    "15": 32
+   }
+  },
+  "749475208377": {
+   "host": "汪定一",
+   "fudaiTotal": 11,
+   "joinable": 9,
+   "hours": [
+    13,
+    15,
+    16
+   ],
+   "hourly": {
+    "13": 5,
+    "15": 2,
+    "16": 4
+   }
+  },
+  "594185216803": {
+   "host": "雷速 莱斯知延科技",
+   "fudaiTotal": 3,
+   "joinable": 3,
+   "hours": [
+    17
+   ],
+   "hourly": {
+    "17": 3
+   }
+  },
+  "567523334915": {
+   "host": "金铲铲孙策",
+   "fudaiTotal": 3,
+   "joinable": 3,
+   "hours": [
+    17
+   ],
+   "hourly": {
+    "17": 3
+   }
+  },
+  "364572912653": {
+   "host": "",
+   "fudaiTotal": 6,
+   "joinable": 6,
+   "hours": [
+    20,
+    22
+   ],
+   "hourly": {
+    "20": 3,
+    "22": 3
+   }
+  },
+  "277723789693": {
+   "host": "天霸猫猫晴",
+   "fudaiTotal": 3,
+   "joinable": 2,
+   "hours": [
+    18
+   ],
+   "hourly": {
+    "18": 3
+   }
+  },
+  "745390200094": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    2
+   ],
+   "hourly": {
+    "2": 1
+   }
+  },
+  "59722362361": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    3
+   ],
+   "hourly": {
+    "3": 1
+   }
+  },
+  "200890247500": {
+   "host": "",
+   "fudaiTotal": 8,
+   "joinable": 8,
+   "hours": [
+    2,
+    19
+   ],
+   "hourly": {
+    "2": 7,
+    "19": 1
+   }
+  },
+  "351791255104": {
+   "host": "爽全",
+   "fudaiTotal": 19,
+   "joinable": 15,
+   "hours": [
+    3,
+    4,
+    5
+   ],
+   "hourly": {
+    "3": 2,
+    "4": 10,
+    "5": 7
+   }
+  },
+  "39644365772": {
+   "host": "自习（无畏契约）",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    13
+   ],
+   "hourly": {
+    "13": 1
+   }
+  },
+  "645247353822": {
+   "host": "",
+   "fudaiTotal": 2,
+   "joinable": 2,
+   "hours": [
+    14
+   ],
+   "hourly": {
+    "14": 2
+   }
+  },
+  "476574710493": {
+   "host": "博文加点油🙂‍↔️",
+   "fudaiTotal": 3,
+   "joinable": 3,
+   "hours": [
+    15
+   ],
+   "hourly": {
+    "15": 3
+   }
+  },
+  "697915709368": {
+   "host": "海风（沧海文化）",
+   "fudaiTotal": 10,
+   "joinable": 9,
+   "hours": [
+    14,
+    15,
+    16
+   ],
+   "hourly": {
+    "14": 4,
+    "15": 2,
+    "16": 4
+   }
+  },
+  "51976145530": {
+   "host": "昊文🍊星城",
+   "fudaiTotal": 6,
+   "joinable": 2,
+   "hours": [
+    15
+   ],
+   "hourly": {
+    "15": 6
+   }
+  },
+  "998047814469": {
+   "host": "牙不齐的牙牙👫👧👶🐝",
+   "fudaiTotal": 14,
+   "joinable": 8,
+   "hours": [
+    16
+   ],
+   "hourly": {
+    "16": 14
+   }
+  },
+  "814864258397": {
+   "host": "",
+   "fudaiTotal": 3,
+   "joinable": 3,
+   "hours": [
+    18
+   ],
+   "hourly": {
+    "18": 3
+   }
+  },
+  "80013175725": {
+   "host": "觅野小宝大舞台（觅野涅槃）",
+   "fudaiTotal": 3,
+   "joinable": 0,
+   "hours": [
+    18
+   ],
+   "hourly": {
+    "18": 3
+   }
+  },
+  "976103950649": {
+   "host": "刀削面",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    18
+   ],
+   "hourly": {
+    "18": 1
+   }
+  },
+  "316597450876": {
+   "host": "",
+   "fudaiTotal": 14,
+   "joinable": 10,
+   "hours": [
+    18
+   ],
+   "hourly": {
+    "18": 14
+   }
+  },
+  "104539390582": {
+   "host": "爱神(三角洲行动)",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    22
+   ],
+   "hourly": {
+    "22": 1
+   }
+  },
+  "669181660842": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    1
+   ],
+   "hourly": {
+    "1": 1
+   }
+  },
+  "132316582423": {
+   "host": "知微情感聆听",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    3
+   ],
+   "hourly": {
+    "3": 1
+   }
+  },
+  "955184678387": {
+   "host": "云途叙",
+   "fudaiTotal": 2,
+   "joinable": 2,
+   "hours": [
+    5
+   ],
+   "hourly": {
+    "5": 2
+   }
+  },
+  "59792976392": {
+   "host": "农村黑妹",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    5
+   ],
+   "hourly": {
+    "5": 1
+   }
+  },
+  "445161474051": {
+   "host": "安琪🇨🇳在（日本）",
+   "fudaiTotal": 3,
+   "joinable": 2,
+   "hours": [
+    6
+   ],
+   "hourly": {
+    "6": 3
+   }
+  },
+  "33959579239": {
+   "host": "北京小文",
+   "fudaiTotal": 3,
+   "joinable": 0,
+   "hours": [
+    7
+   ],
+   "hourly": {
+    "7": 3
+   }
+  },
+  "964253109632": {
+   "host": "书总娱乐",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    10
+   ],
+   "hourly": {
+    "10": 1
+   }
+  },
+  "782080925759": {
+   "host": "包子（三角洲行动）",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    10
+   ],
+   "hourly": {
+    "10": 1
+   }
+  },
+  "731918444565": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    14
+   ],
+   "hourly": {
+    "14": 1
+   }
+  },
+  "888623171125": {
+   "host": "维律师法律咨询",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    14
+   ],
+   "hourly": {
+    "14": 1
+   }
+  },
+  "170089930727": {
+   "host": "",
+   "fudaiTotal": 2,
+   "joinable": 2,
+   "hours": [
+    17
+   ],
+   "hourly": {
+    "17": 2
+   }
+  },
+  "972881429320": {
+   "host": "奈克-AML",
+   "fudaiTotal": 2,
+   "joinable": 1,
+   "hours": [
+    17
+   ],
+   "hourly": {
+    "17": 2
+   }
+  },
+  "185868065061": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    17
+   ],
+   "hourly": {
+    "17": 1
+   }
+  },
+  "260677561734": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    18
+   ],
+   "hourly": {
+    "18": 1
+   }
+  },
+  "235435566312": {
+   "host": "",
+   "fudaiTotal": 5,
+   "joinable": 2,
+   "hours": [
+    0,
+    1
+   ],
+   "hourly": {
+    "0": 3,
+    "1": 2
+   }
+  },
+  "32063570834": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    1
+   ],
+   "hourly": {
+    "1": 1
+   }
+  },
+  "601309218434": {
+   "host": "",
+   "fudaiTotal": 5,
+   "joinable": 3,
+   "hours": [
+    2,
+    15
+   ],
+   "hourly": {
+    "2": 1,
+    "15": 4
+   }
+  },
+  "667140325337": {
+   "host": "禅如聆听",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    4
+   ],
+   "hourly": {
+    "4": 1
+   }
+  },
+  "266212032044": {
+   "host": "阿新",
+   "fudaiTotal": 3,
+   "joinable": 0,
+   "hours": [
+    7
+   ],
+   "hourly": {
+    "7": 3
+   }
+  },
+  "756276700118": {
+   "host": "海派观点",
+   "fudaiTotal": 6,
+   "joinable": 6,
+   "hours": [
+    8
+   ],
+   "hourly": {
+    "8": 6
+   }
+  },
+  "12450819200": {
+   "host": "股沐君子兰",
+   "fudaiTotal": 1,
+   "joinable": 1,
+   "hours": [
+    9
+   ],
+   "hourly": {
+    "9": 1
+   }
+  },
+  "119601611923": {
+   "host": "小u哈 ²º⁶⁷💪奋斗版",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    11
+   ],
+   "hourly": {
+    "11": 1
+   }
+  },
+  "913122960914": {
+   "host": "",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    12
+   ],
+   "hourly": {
+    "12": 2
+   }
+  },
+  "175345233597": {
+   "host": "户外唱歌磊（11月25号26号生日庆）",
+   "fudaiTotal": 9,
+   "joinable": 3,
+   "hours": [
+    13,
+    14
+   ],
+   "hourly": {
+    "13": 5,
+    "14": 4
+   }
+  },
+  "343623567816": {
+   "host": "",
+   "fudaiTotal": 3,
+   "joinable": 2,
+   "hours": [
+    14
+   ],
+   "hourly": {
+    "14": 3
+   }
+  },
+  "87052028417": {
+   "host": "吴克群",
+   "fudaiTotal": 6,
+   "joinable": 3,
+   "hours": [
+    15,
+    18
+   ],
+   "hourly": {
+    "15": 4,
+    "18": 2
+   }
+  },
+  "897866748433": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    18
+   ],
+   "hourly": {
+    "18": 1
+   }
+  },
+  "819835354613": {
+   "host": "王者荣耀赖神（舒服天团）",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    16
+   ],
+   "hourly": {
+    "16": 1
+   }
+  },
+  "830266801361": {
+   "host": "大妙聆听开心凯岩",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    8
+   ],
+   "hourly": {
+    "8": 2
+   }
+  },
+  "323703966153": {
+   "host": "美美古法健身操",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    8
+   ],
+   "hourly": {
+    "8": 2
+   }
+  },
+  "363938705921": {
+   "host": "笛子～小柔🎵816🌞",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    9
+   ],
+   "hourly": {
+    "9": 2
+   }
+  },
+  "378229217706": {
+   "host": "笑笑妈有氧运动健身",
+   "fudaiTotal": 7,
+   "joinable": 1,
+   "hours": [
+    9,
+    10
+   ],
+   "hourly": {
+    "9": 6,
+    "10": 1
+   }
+  },
+  "998401749220": {
+   "host": "股海踏浪",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    13
+   ],
+   "hourly": {
+    "13": 1
+   }
+  },
+  "852901563070": {
+   "host": "张森财经",
+   "fudaiTotal": 6,
+   "joinable": 1,
+   "hours": [
+    13,
+    14
+   ],
+   "hourly": {
+    "13": 5,
+    "14": 1
+   }
+  },
+  "139412059519": {
+   "host": "林清（国一小乔）",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    15
+   ],
+   "hourly": {
+    "15": 2
+   }
+  },
+  "123792473370": {
+   "host": "呆瓜小匪🍉（11月23日生日版🎂",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    15
+   ],
+   "hourly": {
+    "15": 1
+   }
+  },
+  "767790537343": {
+   "host": "贪吃小欣（三角洲手游测评）",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    16
+   ],
+   "hourly": {
+    "16": 1
+   }
+  },
+  "288049162571": {
+   "host": "小屿（国服小乔）",
+   "fudaiTotal": 4,
+   "joinable": 0,
+   "hours": [
+    16
+   ],
+   "hourly": {
+    "16": 4
+   }
+  },
+  "533618191478": {
+   "host": "发财1V4",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    16
+   ],
+   "hourly": {
+    "16": 1
+   }
+  },
+  "879750968371": {
+   "host": "小博博长大了",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    17
+   ],
+   "hourly": {
+    "17": 2
+   }
+  },
+  "999146174230": {
+   "host": "",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    23
+   ],
+   "hourly": {
+    "23": 2
+   }
+  },
+  "839009024810": {
+   "host": "32分钟",
+   "fudaiTotal": 4,
+   "joinable": 2,
+   "hours": [
+    19,
+    20
+   ],
+   "hourly": {
+    "19": 2,
+    "20": 2
+   }
+  },
+  "456066026839": {
+   "host": "甜奈",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    1
+   ],
+   "hourly": {
+    "1": 2
+   }
+  },
+  "922375951379": {
+   "host": "17小鬼PUBG",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    1
+   ],
+   "hourly": {
+    "1": 1
+   }
+  },
+  "73277973078": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    7
+   ],
+   "hourly": {
+    "7": 1
+   }
+  },
+  "800389022931": {
+   "host": "",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    3
+   ],
+   "hourly": {
+    "3": 1
+   }
+  },
+  "5838004038": {
+   "host": "小呆龙ovo（国一妲己）",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    3,
+    4
+   ],
+   "hourly": {
+    "3": 1,
+    "4": 1
+   }
+  },
+  "38021674992": {
+   "host": "月球图书馆",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    3
+   ],
+   "hourly": {
+    "3": 1
+   }
+  },
+  "310011896807": {
+   "host": "东东电竞萧炎（三角洲行动）",
+   "fudaiTotal": 4,
+   "joinable": 0,
+   "hours": [
+    3,
+    4
+   ],
+   "hourly": {
+    "3": 3,
+    "4": 1
+   }
+  },
+  "705826273851": {
+   "host": "小妹妹（皇帝电竞）",
+   "fudaiTotal": 7,
+   "joinable": 5,
+   "hours": [
+    3,
+    4
+   ],
+   "hourly": {
+    "3": 4,
+    "4": 3
+   }
+  },
+  "19149460106": {
+   "host": "美美电台🍓",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    4
+   ],
+   "hourly": {
+    "4": 1
+   }
+  },
+  "176916250748": {
+   "host": "王者阿水",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    4
+   ],
+   "hourly": {
+    "4": 1
+   }
+  },
+  "12889853608": {
+   "host": "金铲铲洋仔",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    5
+   ],
+   "hourly": {
+    "5": 1
+   }
+  },
+  "75308400925": {
+   "host": "小虎牙在海外祺祺",
+   "fudaiTotal": 3,
+   "joinable": 2,
+   "hours": [
+    4,
+    5
+   ],
+   "hourly": {
+    "4": 1,
+    "5": 2
+   }
+  },
+  "972463825431": {
+   "host": "陈莫欣🎤早04:20",
+   "fudaiTotal": 4,
+   "joinable": 0,
+   "hours": [
+    4,
+    5,
+    6
+   ],
+   "hourly": {
+    "4": 1,
+    "5": 2,
+    "6": 1
+   }
+  },
+  "920230457316": {
+   "host": "三层堡（三角洲行动）",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    5
+   ],
+   "hourly": {
+    "5": 1
+   }
+  },
+  "277644366692": {
+   "host": "解说员大嘴.慕鑫体育",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    5
+   ],
+   "hourly": {
+    "5": 1
+   }
+  },
+  "7355480526": {
+   "host": "煲小咪",
+   "fudaiTotal": 5,
+   "joinable": 0,
+   "hours": [
+    5,
+    6
+   ],
+   "hourly": {
+    "5": 1,
+    "6": 4
+   }
+  },
+  "245408755751": {
+   "host": "许佳❤️",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    5
+   ],
+   "hourly": {
+    "5": 2
+   }
+  },
+  "754933540259": {
+   "host": "贺勤有氧运动健身",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    5
+   ],
+   "hourly": {
+    "5": 1
+   }
+  },
+  "731570156146": {
+   "host": "",
+   "fudaiTotal": 4,
+   "joinable": 0,
+   "hours": [
+    5,
+    6,
+    7
+   ],
+   "hourly": {
+    "5": 1,
+    "6": 2,
+    "7": 1
+   }
+  },
+  "89255869336": {
+   "host": "@爱运动的悦悦",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    6
+   ],
+   "hourly": {
+    "6": 2
+   }
+  },
+  "115925949175": {
+   "host": "李宗岩有氧健身",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    6
+   ],
+   "hourly": {
+    "6": 1
+   }
+  },
+  "679591142415": {
+   "host": "赵一瑜伽瘦身塑形",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    6
+   ],
+   "hourly": {
+    "6": 1
+   }
+  },
+  "478749409874": {
+   "host": "丽丽有氧健身塑形",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    6
+   ],
+   "hourly": {
+    "6": 1
+   }
+  },
+  "37929989664": {
+   "host": "楠楠钢琴演奏（愿世界和平）",
+   "fudaiTotal": 5,
+   "joinable": 0,
+   "hours": [
+    6
+   ],
+   "hourly": {
+    "6": 5
+   }
+  },
+  "262989874651": {
+   "host": "燕子古法运动健身",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    6
+   ],
+   "hourly": {
+    "6": 1
+   }
+  },
+  "186446583901": {
+   "host": "周周古法健身操",
+   "fudaiTotal": 5,
+   "joinable": 0,
+   "hours": [
+    6,
+    7
+   ],
+   "hourly": {
+    "6": 4,
+    "7": 1
+   }
+  },
+  "72651802483": {
+   "host": "王者乔兜(国服小乔)",
+   "fudaiTotal": 4,
+   "joinable": 0,
+   "hours": [
+    7,
+    8,
+    9
+   ],
+   "hourly": {
+    "7": 2,
+    "8": 1,
+    "9": 1
+   }
+  },
+  "209879741506": {
+   "host": "洁洁很哇塞户外",
+   "fudaiTotal": 5,
+   "joinable": 0,
+   "hours": [
+    7,
+    8
+   ],
+   "hourly": {
+    "7": 4,
+    "8": 1
+   }
+  },
+  "951394879670": {
+   "host": "无为校长-无为",
+   "fudaiTotal": 2,
+   "joinable": 0,
+   "hours": [
+    7
+   ],
+   "hourly": {
+    "7": 2
+   }
+  },
+  "755662475847": {
+   "host": "夏天🌸",
+   "fudaiTotal": 5,
+   "joinable": 2,
+   "hours": [
+    7
+   ],
+   "hourly": {
+    "7": 5
+   }
+  },
+  "940086237608": {
+   "host": "河南小三·志在千里",
+   "fudaiTotal": 4,
+   "joinable": 0,
+   "hours": [
+    7
+   ],
+   "hourly": {
+    "7": 4
+   }
+  },
+  "279218801641": {
+   "host": "静静形体有氧健身运动",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    7
+   ],
+   "hourly": {
+    "7": 1
+   }
+  },
+  "333120543551": {
+   "host": "枫止",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    7
+   ],
+   "hourly": {
+    "7": 1
+   }
+  },
+  "997934430854": {
+   "host": "鹿鹿姐妹有氧形体健身",
+   "fudaiTotal": 5,
+   "joinable": 0,
+   "hours": [
+    7,
+    8
+   ],
+   "hourly": {
+    "7": 3,
+    "8": 2
+   }
+  },
+  "350059220200": {
+   "host": "南希教化妆",
+   "fudaiTotal": 4,
+   "joinable": 0,
+   "hours": [
+    8
+   ],
+   "hourly": {
+    "8": 4
+   }
+  },
+  "954193741251": {
+   "host": "铿锵之音🎤火火",
+   "fudaiTotal": 5,
+   "joinable": 0,
+   "hours": [
+    9
+   ],
+   "hourly": {
+    "9": 5
+   }
+  },
+  "18601833454": {
+   "host": "航妹妹会弹唱🐰",
+   "fudaiTotal": 1,
+   "joinable": 0,
+   "hours": [
+    9
+   ],
+   "hourly": {
+    "9": 1
+   }
+  }
+ }
+}

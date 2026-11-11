@@ -273,6 +273,22 @@ run_once(){
   disk_gb=$(df -g "$ROOT" 2>/dev/null | awk 'NR==2{print $4}')
   [ "${disk_gb:-99}" -lt "$DISK_WARN_GB" ] && alert G "磁盘可用 ${disk_gb}Gi 低于 ${DISK_WARN_GB}Gi"
 
+  # ── I1 定期重新学习「黑名单 + 时段画像」（每 30 分钟）──────────────
+  # 🔴 2026-11-11 09:43 用户定稿：不发福袋的进黑名单；常发的学开播时间，
+  #    未开播就不探测。数据源 anchors.json（visits/fudaiTotal/hourly）。
+  #    30 分钟一次足够——福袋数据本来就在持续累积，不必更密；
+  #    hunter 侧有 mtime 热更新，写完立即生效，不需要重启。
+  local _ab="$ROOT/data/auto-blacklist.json"
+  local _ab_age=999999
+  if [ -f "$_ab" ]; then
+    _ab_age=$(( $(date +%s) - $(stat -f '%m' "$_ab") ))
+  fi
+  if [ "$_ab_age" -gt 1800 ]; then
+    local _lres
+    _lres=$(node "$ROOT/scripts/auto-blacklist.mjs" 2>&1 | tail -2)
+    say "🧠 重新学习黑名单/时段画像：${_lres//$'\n'/ | }"
+  fi
+
   # ── I2 定期刷新本地关注名单（每 6 小时）────────────────────────────
   # 🔴 2026-11-11 07:17：hunter35 的 fans-panel 校验依赖 data/following-cache.json，
   #    实测 5 小时后主号关注数从 181 涨到 190，新增的未进缓存，会导致

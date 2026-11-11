@@ -331,6 +331,49 @@ function disp(room){
 }
 
 const ANCHORS_FILE=DATA_DIR+'/anchors.json';
+
+// 🚫 2026-11-11 09:42 用户定稿「不发福袋的直播间就加入黑名单，经常发的就要记住
+//    且学习分析开播时间，未开播时就不去探测该直播间」。
+//    两个数据文件都由 scripts/auto-blacklist.mjs 从 anchors.json 学习生成：
+//      data/auto-blacklist.json  访问>=N 次却零福袋的房间（与手写 blacklist-rooms.txt 并行）
+//      data/hour-windows.json    每个房间历史上发过福袋的小时（用于「未开播不探测」）
+//    ⚠ 阈值只在生成脚本里，这里只读产物；重新学习跑那支脚本即可，不必改代码。
+const AUTO_BLACK_FILE = DATA_DIR+'/auto-blacklist.json';
+const HOUR_WINDOW_FILE = DATA_DIR+'/hour-windows.json';
+let AUTO_BLACK = new Set();
+let HOUR_WINDOWS = {};
+let _autoMeta = { at:0 };
+function loadLearnTables(force){
+  // 热更新：文件变了就重读（与关注缓存同样的坑：进程长跑，文件更新了要能感知）
+  let mt=0;
+  try{ mt=fs.statSync(AUTO_BLACK_FILE).mtimeMs + fs.statSync(HOUR_WINDOW_FILE).mtimeMs; }catch(e){ return; }
+  if(!force && mt && mt===_autoMeta.at) return;
+  try{
+    const ab=JSON.parse(fs.readFileSync(AUTO_BLACK_FILE,'utf8'))||{};
+    AUTO_BLACK = new Set((ab.rooms||[]).map(x=>String(x.room)));
+  }catch(e){ AUTO_BLACK = new Set(); }
+  try{
+    const hw=JSON.parse(fs.readFileSync(HOUR_WINDOW_FILE,'utf8'))||{};
+    HOUR_WINDOWS = hw.rooms||{};
+  }catch(e){ HOUR_WINDOWS = {}; }
+  _autoMeta.at=mt;
+  log(`  🚫 自动黑名单 ${AUTO_BLACK.size} 个 · 时段画像 ${Object.keys(HOUR_WINDOWS).length} 个`);
+}
+
+/** 当前小时是否在该房间的历史发袋时段内（±1 小时容差，跨午夜正确环绕） */
+function inHourWindow(room){
+  const w=HOUR_WINDOWS[String(room)];
+  if(!w || !Array.isArray(w.hours) || !w.hours.length) return true;   // 没学过时段 → 不限制，给它机会
+  const h=new Date().getHours();
+  for(const raw of w.hours){
+    const x=Number(raw);
+    if(!Number.isFinite(x)) continue;
+    const d=Math.abs(h-x);
+    if(d<=1 || d>=23) return true;
+  }
+  return false;
+}
+
 async function updateAnchor(room, host, result, at){
   // 🔒 多账号并行：anchors.json 是共享档案，必须锁保护，
   //    否则实例 B 的整文件覆盖会把实例 A 刚学到的成果抹掉。
@@ -1817,6 +1860,14 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
       // 🚫 读取黑名单（粉丝团型为主的房间）
       let blacklist=[];
       try{ blacklist=fs.readFileSync(ROOT+'/scripts/blacklist-rooms.txt','utf8').trim().split('\n').filter(Boolean); }catch(e){}
+      // 🚫 2026-11-11 09:42 并入自动黑名单（访问够多却零福袋的房间）。
+      //    每次重读是为了让新学出来的黑名单立即生效，不必重启进程。
+      loadLearnTables();
+      if(AUTO_BLACK.size){
+        const _before=blacklist.length;
+        blacklist=[...new Set([...blacklist, ...AUTO_BLACK])];
+        if(blacklist.length>_before) log(`  🚫 自动黑名单并入 ${AUTO_BLACK.size} 个（合计 ${blacklist.length}）`);
+      }
       const ordered=[...vip.filter(v=>!blacklist.includes(v)), ...rooms.filter(r=>!vip.includes(r)&&!blacklist.includes(r))];
       if(blacklist.length) log('黑名单房间:', blacklist.length, '个');
       if(vip.length) log('VIP房间优先:', vip.length, '个');
@@ -1941,6 +1992,9 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
       //    会被整轮跳过（2026-11-02 实测某主播当天被探测 0 次）。
       const pinnedNow=Object.keys(USER_PINNED).filter(v=>{
         if(blacklist.includes(v)) return false;
+        // 🕐 「未开播时就不去探测」：有历史时段画像且当前小时不在窗口内 → 跳过。
+        //    ⚠ 只在探测阶段过滤，不拉黑——换个时段它还会被探到。
+        if(!inHourWindow(v)) return false;
         if((nowTs-(cooldown[v]||0))<=coolMs) return false;
         const e=USER_PINNED[v];
         // 常驻型只在开播时段探测：时段外他大概率没开播，探了也是白探
@@ -2184,6 +2238,10 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
           //    因为纯粉丝团房（joinable=0）抢不到，不该因此靠前。
           const goldN=a.joinable||0;
           if(goldN>0) p -= Math.min(28, 8 + goldN*0.6);
+          // 🕐 2026-11-11 09:42 时段权重：当前小时不在该房间的历史发袋窗口内 → 大幅降权。
+          //    降权而不是排除：hourly 只是历史观测，「这小时没见过」≠「不发」，
+          //    直接排除会永久错过没被观测到的时段。降 25 分足以让它排到后面。
+          if(!inHourWindow(x.room)) p += 25;
           const cnt=(a.hourly||{})[curHour]||0;
           if(cnt>0){
             const rate=a.fudaiTotal ? (a.joinable||0)/a.fudaiTotal : 0;
