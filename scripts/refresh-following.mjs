@@ -60,15 +60,32 @@ for (const [acc, port] of ACCOUNTS) {
       const d = JSON.parse(e.data);
       if (d.id && q.has(d.id)) { q.get(d.id)(d); q.delete(d.id); }
     });
+    // 🔴 2026-11-11 18:27 修 hang：原 send() 的 Promise 在 ws 断开/错误时
+    //    永不 resolve，若连续手动跑撞上主实例 VIP 探测导航导致连接被关，
+    //    整个脚本会 unsettled top-level await 静默退出、不写缓存，
+    //    而 health-guard 是同步阻塞调用，会把守护两个节拍一起卡住。
+    //    改法：每个 send 带超时兜底 resolve；close/error 清空所有 pending。
+    const settleAll = () => {
+      for (const [, resolve] of q) resolve(null);
+      q.clear();
+    };
+    ws.addEventListener('close', settleAll);
+    ws.addEventListener('error', settleAll);
     const send = (m, a) => new Promise((r) => {
-      const k = ++id; q.set(k, r);
-      ws.send(JSON.stringify({ id: k, method: m, params: a }));
+      const k = ++id;
+      let done = false;
+      const finish = (v) => { if (done) return; done = true; clearTimeout(tm); q.delete(k); r(v); };
+      const tm = setTimeout(() => finish(null), 150000);
+      q.set(k, finish);
+      try { ws.send(JSON.stringify({ id: k, method: m, params: a })); }
+      catch (_) { finish(null); }
     });
     // ⚠ timeout 必须放进 CDP params。原实现把它当 send 的第三个参数，
     //   而 send 只接 (m,a)，超时其实从未生效；全量翻页需要 120 秒。
     const ev = async (expression, timeoutMs = 40000) => {
       const r = await send('Runtime.evaluate',
         { expression, returnByValue: true, awaitPromise: true, timeout: timeoutMs });
+      if (!r) throw new Error('CDP 无响应（连接断开或超时）');
       return r?.result?.result?.value;
     };
 
@@ -140,18 +157,31 @@ for (const [acc, v] of Object.entries(out)) {
     if (!byUid.has(String(x.uid))) added++;
     byUid.set(String(x.uid), x);
   }
+  const finalList = [...byUid.values()];
+  const finalCount = Number(v.count) || finalList.length;
+  // 🔴 2026-11-11 18:25 修自己引入的元数据回归：
+  //    20 分钟快刷只拉 20 个，会把「上次 --full 拉到 206/206」的 full/apiLimited/pages
+  //    覆盖成 false/true/0，让未来排查误判「缓存只有 20 个、被 API 限制」。
+  //    hunter 只读 list（功能不受影响），但元数据会误导人，属「看不见和没有表现一样」的坑。
+  //    改法：full 如实反映本次模式；新增 lastFull* 记录上次全量证据，快刷不清空；
+  //    apiLimited 改按最终缓存人数重算，而不是看本次拉了多少。
   merged[acc] = {
     nick: v.nick,
     count: v.count,
     at: v.at,
-    apiLimited: !!v.apiLimited,
+    apiLimited: finalList.length < (finalCount - 5),
     full: !!v.full,
     pages: v.pages,
     ms: v.ms,
-    list: [...byUid.values()],
+    lastFullAt: (v.full === true) ? v.at : (prev.lastFullAt || null),
+    lastFullPages: (v.full === true) ? v.pages : (prev.lastFullPages ?? null),
+    lastFullMs: (v.full === true) ? v.ms : (prev.lastFullMs ?? null),
+    lastFullCount: (v.full === true) ? finalList.length : (prev.lastFullCount ?? null),
+    list: finalList,
   };
   const uniq = new Set(merged[acc].list.map((x) => String(x.name || '').trim()).filter(Boolean));
-  console.log(`  ${acc}: 本次拉到 ${v.list.length}，累积 ${merged[acc].list.length}（去重 ${uniq.size} 个昵称，新增 ${added}）`);
+  console.log(`  ${acc}: 本次拉到 ${v.list.length}，累积 ${merged[acc].list.length}（去重 ${uniq.size} 个昵称，新增 ${added}）` +
+    (merged[acc].lastFullAt ? ` | 上次全量 ${merged[acc].lastFullCount} 人 @ ${merged[acc].lastFullAt}` : ''));
 }
 fs.writeFileSync(OUT, JSON.stringify(merged, null, 1));
 console.log(`  已写入 ${OUT}`);
