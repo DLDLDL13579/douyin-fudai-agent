@@ -654,16 +654,20 @@ async function fetchFollowingSet(tab){
       while(more&&p<15){
         var k=JSON.parse(await (await fetch('/aweme/v1/web/user/following/list/?user_id='+u.uid+'&sec_user_id='+u.sec_uid+'&count=20&offset='+off+'&aid=6383&device_platform=webapp&_t='+Date.now(),{credentials:'include',cache:'no-store'})).text());
         var arr=k.followings||[];
-        all=all.concat(arr.map(function(x){return String(x.uid)}));
+          // 🔑 2026-11-11 10:04 同时收昵称：之前只返 uid，导致「uid 拿不到」时
+          //    这套权威数据完全用不上，只能退到可能过期的本地缓存文件。
+          all=all.concat(arr.map(function(x){return {uid:String(x.uid),name:String(x.nickname||'')}}));
         more=!!k.has_more; off+=20; p++; if(!arr.length)break;
       }
       return JSON.stringify({uid:u.uid,cnt:u.following_count,list:all});
     }catch(e){return JSON.stringify({err:String(e.message).slice(0,80)})}})()`, 30000);
     const j = JSON.parse(r || '{}');
     if(j.err || !Array.isArray(j.list)) return null;
-    _followingCache = { at: now, set: new Set(j.list.map(String)), uid: String(j.uid||'') };
-    log(`  🔑 关注列表已缓存：${j.cnt} 人（拉到 ${j.list.length} 个）`);
-    return _followingCache.set;
+    _followingCache = { at: now, set: new Set(j.list.map(x=>String(x&&x.uid||'')).filter(Boolean)),
+                        names: new Set(j.list.map(x=>String(x&&x.name||'').trim()).filter(Boolean)),
+                        uid: String(j.uid||''), cnt: j.cnt,
+                        raw: j.list };
+      log(`  🔑 关注列表已缓存：${j.cnt} 人（拉到 ${_followingCache.set.size} 个 uid / ${_followingCache.names.size} 个昵称）`);
   }catch(e){ return null; }
 }
 
@@ -1014,12 +1018,45 @@ async function _ensureFollowImpl(tab, room){
             //    本地命中不了时，强制重读一次缓存文件（管他 mtime 有没有变），
             //    因为文件可能是别的进程刚写的；仍不中才认输。
             if(!_byName){
+              // ① 先重置缓存重读本地文件（防别的进程刚写完、本进程持旧对象）
               _localFollow = null; _localFollowMtime = 0;
               if(isFollowedByName(room)){
                 log(`  🔑 重读缓存后命中：${NAMES[room]||room} 已关注，放行`);
                 return {ok:true, reason:'already-by-name-reload',
                   diag:{verifyHow:'already-by-name-reload',room,bodyLen:st.bodyLen,head:st.head}};
               }
+              // ② 🔴 2026-11-11 10:04 终极兜底：本地文件也可能是几小时前的快照。
+              //    用户 09:53 关注了「颖姐财经」、10:01 关注了「A凝」，
+              //    两次都在缓存刷新前就被福袋撞上，白丢福袋。
+              //    这里实时拉一次服务端关注列表（fetchFollowingSet 自带 10 分钟内存缓存，
+              //    不会每房间都发请求），用昵称比对——服务端有就是真有。
+              try{
+                await fetchFollowingSet(tab);
+                const _srvNames = _followingCache && _followingCache.names;
+                const _nm = String(NAMES[room]||'').trim();
+                if(_srvNames && _srvNames.size && _nm){
+                  let hit=false;
+                  if(_srvNames.has(_nm)) hit=true;
+                  else { for(const n of _srvNames){ if(n && (n.includes(_nm)||_nm.includes(n))){ hit=true; break; } } }
+                  if(hit){
+                    // 命中就顺手把这条补进本地缓存，省下次再查
+                    try{
+                      const p2=DATA_DIR+'/following-cache.json';
+                      const raw=JSON.parse(fs.readFileSync(p2,'utf8'))||{};
+                      const acc=ACCOUNT_TAG==='main'?'main':ACCOUNT_TAG;
+                      raw[acc]=raw[acc]||{nick:'',at:'',list:[]};
+                      raw[acc].list=raw[acc].list||[];
+                      if(!raw[acc].list.some(x=>String(x.name||'')===_nm)) raw[acc].list.push({uid:'',name:_nm});
+                      fs.writeFileSync(p2,JSON.stringify(raw,null,1));
+                      _localFollow=null; _localFollowMtime=0;
+                    }catch(e){}
+                    log(`  🔑 服务端实时命中：${_nm} 已关注，放行`);
+                    return {ok:true, reason:'already-by-server',
+                      diag:{verifyHow:'already-by-server',room,bodyLen:st.bodyLen,head:st.head}};
+                  }
+                  log(`  🔑 服务端 ${_srvNames.size} 个昵称里也没有：${_nm}`);
+                }
+              }catch(e){ log(`  ⚠️ 服务端实时查询失败: ${String(e.message||e).slice(0,60)}`); }
             }
             log(`  🔑 uid 空且本地名单未命中：${NAMES[room]||room}，保持拦截`);
           }
