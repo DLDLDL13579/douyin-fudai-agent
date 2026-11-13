@@ -149,6 +149,13 @@ function accountsInfo() {
   if (!fs.existsSync(PATHS.accounts)) return [];
   return fs.readdirSync(PATHS.accounts, { withFileTypes: true })
     .filter((d) => d.isDirectory())
+    // 🔴 2026-11-13 15:55 修「byAccount 显示成 0:45/60、1:5/5」：
+    //    macOS 的 .DS_Store 等隐藏项 / 无 meta.json 的目录曾被当成账号混进来，
+    //    让 byAccount 的 key 变成怪名字。这里只认「以字母数字开头且有 meta.json」。
+    .filter((d) => {
+      if (!/^[A-Za-z0-9][A-Za-z0-9_.-]*$/.test(d.name)) return false;
+      try { return fs.existsSync(path.join(PATHS.accounts, d.name, 'meta.json')); } catch { return false; }
+    })
     .map((d) => {
       let meta = {};
       try { meta = JSON.parse(fs.readFileSync(path.join(PATHS.accounts, d.name, 'meta.json'), 'utf8')); } catch {}
@@ -443,9 +450,27 @@ function buildStatus() {
   const accs = accountsInfo();
 
   // 统计口径：保守去重（今日遭遇/参与率/分账号战绩等）
-  const rows = dedupRows([...readJsonl(PATHS.participations), ...readJsonl(PATHS.legacy).map((r) => ({ ...r, account: 'default' }))]);
+  // 🎯 2026-11-13 15:50 存量降噪（与抓取侧 rec() 同一口径，只影响展示、不改原始流水）：
+  //    抓取侧的 probe-skip 降噪只对「新写入」生效，今天已经落库的 214 条探测号
+  //    need-follow/fans-skip 噪声还在 participations.jsonl 里，面板仍显示 18%。
+  //    这里按同一规则剔除：账号在 wait-config.json 的 probeQuota 里
+  //    标了 quietSkipResults(或 perMsScale<1) 且结果是这两类 → 统计时忽略。
+  //    ✅ 原始 jsonl 一行不改，排障仍可查；
+  //    ✅ 主号不在名单，口径零变化。
+  const _wcAll = (() => { try { return JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'wait-config.json'), 'utf8')) || {}; } catch { return {}; } })();
+  const _quietAcc = (acc) => {
+    const q = ((_wcAll.probeQuota || {})[acc]) || {};
+    if (q.quietSkipResults === true) return true;
+    if (q.quietSkipResults === undefined && Number(q.perMsScale) > 0 && Number(q.perMsScale) < 1) return true;
+    return false;
+  };
+  const QUIET_RESULTS = new Set(['need-follow', 'fans-skip-daytime']);
+  const isQuietNoise = (r) => _quietAcc(r.account || '') && QUIET_RESULTS.has(String(r.result || ''));
+  const _allRows = [...readJsonl(PATHS.participations), ...readJsonl(PATHS.legacy).map((r) => ({ ...r, account: 'default' }))];
+  const _keptRows = _allRows.filter((r) => !isQuietNoise(r));
+  const rows = dedupRows(_keptRows);
   // 事件流水口径：按「cd 回升 = 新福袋」细粒度去重，保证同房间连抢的每次福袋都显示
-  const eventRows = dedupEventRows([...readJsonl(PATHS.participations), ...readJsonl(PATHS.legacy).map((r) => ({ ...r, account: 'default' }))]);
+  const eventRows = dedupEventRows(_keptRows);
   const wins = readJsonl(PATHS.wins);
   const today = localDay();
   const accLabels = accountLabels(accs);
@@ -456,7 +481,7 @@ function buildStatus() {
   //    被昨 23:59:09 main3 吃掉，看板 main3 今日=0）。
   //    修法：今日统计独立「先按本地日过滤原始行，再 dedupRows」，与
   //    scripts/stats-today.mjs 口径一致；rows 全量去重仍供历史卡片，零改动。
-  const todayRows = dedupRows([...readJsonl(PATHS.participations), ...readJsonl(PATHS.legacy).map((r) => ({ ...r, account: 'default' }))].filter((r) => isLocalDay(r.at, today)));
+  const todayRows = dedupRows(_keptRows.filter((r) => isLocalDay(r.at, today)));
   const joined = todayRows.filter((r) => r.result === 'joined' || r.result === 'maybe-joined');
   const byResult = {};
   for (const r of todayRows) byResult[r.result || 'unknown'] = (byResult[r.result || 'unknown'] || 0) + 1;
