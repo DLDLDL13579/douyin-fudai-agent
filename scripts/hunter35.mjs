@@ -1073,7 +1073,19 @@ async function _ensureFollowImpl(tab, room){
     //    实测 8 秒不自动消失、只有 reload 才消失。16:05 曾假设它是会自动消失的瞬态、
     //    加「等待复探让它消失」，方向错误且无效（c35cd68），已回滚。
     //    真判据必须落在 reload 后的持久态，见文末 16:29 章节；此处保持严格硬门禁不放松。
-    if(st.fansPanel && !st.btn){
+    // 🔴 2026-11-13 14:20 修复「主号真已关注却被 no-follow-btn 拦下」：
+    //    抖音把部分直播间头部已关注态文案从「+加粉丝团」改成「1粉丝团 /
+    //    1粉丝团1钻石点亮」，旧 followed 正则 /加粉丝团|加会员/ 匹配不到；
+    //    而 11-10 加的「查服务端关注列表权威校验」只写在浮层分支里 ——
+    //    no-follow-btn 分支直接拦截、根本不查，白丢真已关注房间的福袋。
+    //    实测今日主号 8 次 no-follow-btn 涉及 大潘说股/小薇古法运动，
+    //    在服务端关注列表里都有 uid 级记录（真已关注）。
+    //    修法：把「无按钮 + 未判已关注 + 头部有粉丝团类组件(含新文案)」的样本
+    //    也纳入同一段权威校验；命中列表才放行，查不到仍按 allowInconclusive:false
+    //    拦截。DOM 直判 followed 正则不放宽，绝不虚报关注成功。离线验证 6/6 通过。
+    //    条件刻意保留原 fans-panel 语义不变（st.fansPanel && !st.btn 一律进），
+    //    只新增「非浮层 + 未判已关注 + 无按钮 + 头部有粉丝团类组件」这一路。
+    if(!st.btn && (st.fansPanel || (!st.followed && /粉丝团|加会员/.test(st.head)))){
       // 🔴 2026-11-09 22:23 撤回 reload 方案：实测 6 次触发 0 次挽回。
       //    根因是 main3 会话的写操作被服务端限制（同房间对照：主号 163→164 成功、
       //    main3 2→2 不落库），reload 后关注按钮必然回来，再判仍是未关注。
@@ -1085,7 +1097,7 @@ async function _ensureFollowImpl(tab, room){
       //    而 16:29 事故证明「未关注用户在浮层期头部也是 +加粉丝团」，单看 DOM 无法区分。
       //    解法：查服务端关注列表（权威），命中就放行，未命中/查询失败保持原拦截。
       //    只在 head 已含粉丝团入口时才查，避免无谓开销。
-      if(/加粉丝团|加会员/.test(st.head)){
+      if(/粉丝团|加会员/.test(st.head)){
         log('  🔑 进入关注列表校验…');
         try{
           const _auid = await getAnchorUid(tab);
@@ -1161,8 +1173,12 @@ async function _ensureFollowImpl(tab, room){
           }
         }catch(e){ log(`  ⚠️ 关注校验异常: ${String(e.message||e).slice(0,100)}`); }
       }
-      return {ok:false,inconclusive:true,reason:'fans-panel',
-        diag:{verifyHow:'fans-panel',bodyLen:st.bodyLen,head:st.head}};
+      // 🔴 2026-11-13：合并后按真实来源区分标签，避免 no-follow-btn 被误记成 fans-panel。
+      //    两种情况都保持 inconclusive + 拦截，硬门禁不变。
+      const _why = st.fansPanel ? 'fans-panel' : 'no-follow-btn';
+      return {ok:false,inconclusive:true,reason:_why,
+        diag:{verifyHow:_why,bodyLen:st.bodyLen,head:st.head,
+          domBtn:st.domBtn,coordOnly:st.coordOnly}};
     }
     if(st.followed){
       // 🔴 2026-11-09 订正：恢复「已关注」判据。抖音已关注态的 DOM 表现就是
