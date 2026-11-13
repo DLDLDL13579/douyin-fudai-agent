@@ -18,6 +18,7 @@ const localDay = (d = new Date()) => {
 //    这样打包成 Windows exe 后不会因为写死 macOS 路径而全盘失效。
 import { APP_ROOT, PATH, findChrome, chromeHint, isPortOpen } from './paths.mjs';
 import { withSharedJson, readSharedJson } from './shared-json.mjs';
+import { reportHot, readHot } from './hot-rooms.mjs';
 const ROOT=APP_ROOT;
 const _argv=process.argv.slice(2);
 const _ai=_argv.indexOf('--account');
@@ -96,6 +97,25 @@ try{ _FOLLOW=Object.assign(_FOLLOW, JSON.parse(fs.readFileSync(DATA_DIR+'/follow
 const FOLLOW_ENABLED=!!_FOLLOW.enabled;
 const FOLLOW_GATE=!!_FOLLOW.requireFollowBeforeJoin;
 const FOLLOW_ALLOW_INCONCLUSIVE=!!_FOLLOW.allowInconclusive;
+// 🔗 2026-11-13 多账号「实时发现信号」联动（用户定稿：探测数据要共享且实时联动）。
+//    配置热加载：每轮重读 json，enabled:false 或文件缺失一律降级为关闭，零回归。
+//    单写者 hot-signal-<acc>.json + TTL；写入是旁路 void 全 try-catch，失败不拖累抓取。
+const HOT_FILE=DATA_DIR+'/hot-rooms-config.json';
+const HOT_DEFAULTS={enabled:true,fudaiTtlSec:300,liveTtlSec:180,maxSignalAgeSec:240,
+                    insertMaxPerGap:2,roundInsertCap:4};
+let _HOT=Object.assign({},HOT_DEFAULTS);
+try{ _HOT=Object.assign(_HOT, JSON.parse(fs.readFileSync(HOT_FILE,'utf8'))||{}); }catch(e){}
+const hotConf=()=>{
+  try{ return Object.assign({},_HOT, JSON.parse(fs.readFileSync(HOT_FILE,'utf8'))||{}); }
+  catch(e){ return Object.assign({},_HOT,{enabled:false}); }  // 文件缺失/损坏 → 关闭联动
+};
+const hotSignal=(room,info)=>{
+  try{
+    const c=hotConf(); if(c.enabled===false) return;
+    const ttl=(info&&info.fudai?Number(c.fudaiTtlSec):Number(c.liveTtlSec))*1000||180000;
+    void reportHot(DATA_DIR, ACCOUNT||'default', room, info, ttl);
+  }catch(e){}
+};
 // 🩺 2026-11-05 18:42 事故增补（单一数据源 follow-config.json）：
 //    点击关注后的二次验证间隔、参与失败后的短冷却。二者都带上下限钳制，配置异常不会卡死主循环。
 const VERIFY_RETRY_MS=Math.max(0,Math.min(20000,Number(_FOLLOW.verifyRetryMs)||0));
@@ -2198,6 +2218,7 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
             if(t && t.length<=24 && !/^抖音/.test(t)){ saveName(v,t); await flushNames(); }
           }
           log(`  ✅ 在播，在线 ${ol}`);
+          hotSignal(v,{online:ol,fudai:false});   // 🔗 实时联动：另一实例下一房间边界即可见
           pRec(v).ok=true;   // 今天见到了开播，不再受「探 3 次就放弃」的限制
           saveProbeToday();
         }else{
@@ -2291,6 +2312,19 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
       // 提到 12 个配合更短停留，同样时间能覆盖更多房间。
       const CANDIDATES=12;
       const pool=[];
+      // 🔗 2026-11-13 实时联动（轮次级）：每轮选房前读别号信号，把「正在发福袋」的房提权
+      //    （roomScore +40 并打 VIP 标记）。⚠ 只改排序，不新增绕过门槛/黑名单的入口：
+      //    这些房仍走下面同一套 ol<minOnline 硬卡。真正的秒级联动在房间边界（见下方 index for）。
+      let _hotBoost=new Set();
+      try{
+        const _hc=hotConf();
+        if(_hc.enabled!==false){
+          const hs=readHot(DATA_DIR,ACCOUNT||'default',Number(_hc.maxSignalAgeSec)*1000||240000);
+          const boosted=hs.filter(h=>h.fudai&&!blacklist.includes(h.room)).slice(0,6);
+          for(const h of boosted) _hotBoost.add(h.room);
+          if(boosted.length) log('🔗 别号热信号提权 '+boosted.length+' 间: '+boosted.map(h=>disp(h.room)).join(','));
+        }
+      }catch(e){}
       let _unknownOnline=0;   // ol<0 的探路名额计数（2026-11-10 19:16）
       for(const room of ordered2){
         const isVip=aliveVip.includes(room);
@@ -2320,7 +2354,9 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
           if(_unknownOnline >= 3) continue;         // VIP 也最多 3 个探路名额
           _unknownOnline++;
         }
-        pool.push({room, online:ol, isVip, host, score:roomScore(host,'',ol,isVip)});
+        const _hb=_hotBoost.has(room);
+        pool.push({room, online:ol, isVip:isVip||_hb, host,
+                   score:roomScore(host,'',ol,isVip)+(_hb?40:0)});
       }
       // 🎯 按优先级排序：游戏/娱乐类 + VIP 优先，带货类靠后
       // 🎯 排序：VIP 优先 → 最近没去过的普通房优先 → 分数
@@ -2552,7 +2588,37 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
       // 停留下限从 180 秒降到 120 秒：福袋倒计时通常 5-10 分钟，
       // 120 秒足以检测到并处理；每个房间少待 60 秒，一轮能多覆盖几个房间。
       const perMsBase=Math.round(WS*Math.min(_WAIT.perRoomMaxMs, Math.max(_WAIT.perRoomMinMs, Math.floor(BATCH_MIN*60000/good.length))));
-      for(const g of good){
+      // 🔗 2026-11-13 实时联动（秒~60 秒级）：改成索引 for，在每个「换房间隙」读别号信号，
+      //    把新鲜的热房 splice 到 gi+1，成为下一个常驻目标。守候开奖期间不回到这个边界，
+      //    所以绝不打断守候；插队房同样走完整门槛硬卡/关注门禁/去重，不绕过任何既有策略。
+      const _inserted=new Set();
+      let _insertCount=0;
+      for(let gi=0; gi<good.length; gi++){
+        const g=good[gi];
+        try{
+          const _hc=hotConf();
+          const _cap=Math.max(0,Math.min(20,Number(_hc.roundInsertCap)||4));
+          const _gap=Math.max(0,Math.min(10,Number(_hc.insertMaxPerGap)||2));
+          if(_hc.enabled!==false && _insertCount<_cap){
+            const hs=readHot(DATA_DIR,ACCOUNT||'default',Number(_hc.maxSignalAgeSec)*1000||240000);
+            const add=[];
+            for(const h of hs){
+              if(add.length>=_gap || _insertCount+add.length>=_cap) break;
+              if(_inserted.has(h.room) || good.some(x=>x.room===h.room)) continue;
+              if(blacklist.includes(h.room)) continue;               // 黑名单硬约束不破
+              const _min=getMinOnline();
+              if(typeof h.online==='number' && h.online>=0 && h.online<_min) continue;  // 门槛硬卡不破
+              add.push({room:h.room, online:h.online, isVip:!!h.fudai, host:'',
+                        score:roomScore('','',h.online,!!h.fudai)+(h.fudai?40:0), hot:true});
+            }
+            if(add.length){
+              good.splice(gi+1,0,...add);
+              for(const a of add) _inserted.add(a.room);
+              _insertCount+=add.length;
+              log('🔗 别号实时热房插队 '+add.length+' 间: '+add.map(a=>disp(a.room)+(a.hot?'[热]':'')).join(','));
+            }
+          }
+        }catch(e){}
         // 🏆 高频金矿房长常驻（2026-11-02 数据驱动）：
         //    锦一电台 354892492946 历史发过 45 次福袋、45 次全部可抢，全部集中在 0-6 点，
         //    约合每 23 分钟一个。原来 VIP 房只待 480 秒，遇到福袋的概率仅约 23%，
@@ -2785,6 +2851,7 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
               for(const k of _FOLLOW_FAILS.keys()){ if(!HANDLED_TIME.has(k)) _FOLLOW_FAILS.delete(k); }
             }
             log(`★★ 福袋! 在线${d.online} ${disp(g.room)} ${JSON.stringify(d.fudai)}`);
+            hotSignal(g.room,{online:d.online,fudai:true});  // 🔗 实时联动：福袋只活几分钟，最高优先级
             // 📸 福袋 DOM 快照：每次识别到福袋就把真实结构存档。
             //    用途：抖音改版后选择器可能静默失效（页面照常加载、candCount 恒为 0），
             //    有成功样本才能对比出到底哪个 class 变了。这是自主进化的依据，不可省。

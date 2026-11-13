@@ -1,0 +1,9 @@
+{
+  "enabled": true,
+  "fudaiTtlSec": 300,
+  "liveTtlSec": 180,
+  "maxSignalAgeSec": 240,
+  "insertMaxPerGap": 2,
+  "roundInsertCap": 4,
+  "note": "2026-11-13 多账号实时联动。任一实例探到在播或识别到福袋，写自己的 hot-signal-<acc>.json；另一实例在每个换房间隙读取除自己外的信号，TTL 过滤后提权插队到下一个常驻，做到秒到 60 秒级联动，不再等自己下一轮采集。守候开奖期间不回房间边界，天然不会被打断。写入是旁路全 try-catch，失败不影响抓取。enabled:false 一键停用联动，热加载无需重启；配置文件缺失同样降级为关闭。fudaiTtlSec/liveTtlSec 是信号存活秒数，maxSignalAgeSec 是消费方新鲜度门槛，取两者更短者。insertMaxPerGap 单个换房间隙最多插队数，roundInsertCap 单轮插队总数上限，防止候选膨胀。信号文件是运行时数据，不进 git。"
+}

@@ -70,3 +70,6 @@ data/cond1-captures/
 data/.following-full-at
 data/probe-today-shared.json
 data/vip-cooldown-shared.json
+
+# 2026-11-13 实时联动信号：运行时数据，不进 git
+data/hot-signal-*.json
