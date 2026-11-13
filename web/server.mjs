@@ -546,6 +546,22 @@ function buildStatus() {
       todayTotal: todayRows.length,
       todayJoined: joined.length,
       rate: todayRows.length ? ((joined.length / todayRows.length) * 100).toFixed(1) : '0.0',
+      // 🎯 2026-11-13 15:26 用户质疑「参与率 18.1% 效果不好」后新增：
+      //    面板顶部的合计参与率会把「探测号」的必然拦截混进来 ——
+      //    main3 关注列表只有 14 人，它遇到的关注型福袋几乎全被判 need-follow
+      //    （这是 11-09 用户定稿的硬门禁行为，不是故障），193 次拦截把
+      //    主号 81% 的真实表现稀释成 18.1%，用户看到的是失真的数。
+      //    这里另给「主号口径」与「探测号口径」，顶部改为突出主号，
+      //    同时保留合计便于对照，**不改任何原始数据与既有字段**。
+      mainTotal: (() => { const a = todayRows.filter((r) => (r.account || 'default') === 'default' || r.account === 'main'); return a.length; })(),
+      mainJoined: (() => { const a = todayRows.filter((r) => ((r.account || 'default') === 'default' || r.account === 'main') && (r.result === 'joined' || r.result === 'maybe-joined')); return a.length; })(),
+      mainRate: (() => {
+        const a = todayRows.filter((r) => (r.account || 'default') === 'default' || r.account === 'main');
+        const j = a.filter((r) => r.result === 'joined' || r.result === 'maybe-joined').length;
+        return a.length ? ((j / a.length) * 100).toFixed(1) : '0.0';
+      })(),
+      probeTotal: (() => { const a = todayRows.filter((r) => r.account && r.account !== 'default' && r.account !== 'main'); return a.length; })(),
+      probeJoined: (() => { const a = todayRows.filter((r) => r.account && r.account !== 'default' && r.account !== 'main' && (r.result === 'joined' || r.result === 'maybe-joined')); return a.length; })(),
       wins: wins.filter((w) => isLocalDay(w.at, today)).length,
       allTotal: rows.length,
       allJoined: rows.filter((r) => r.result === 'joined' || r.result === 'maybe-joined').length,
@@ -706,47 +722,82 @@ function buildStatus() {
         return h.map(x => String(x).padStart(2, '0') + ':00').join(',');
       };
       let PINNED = [];
+      const PINNED_HOURS = {};
       try {
         const cfg = JSON.parse(fs.readFileSync(path.join(ROOT, 'data', 'pinned-hosts.json'), 'utf8')) || {};
         PINNED = Object.entries(cfg).map(([id, v]) => [id, v.name || id, hoursText(v.hours)]);
+        for (const [id, v] of Object.entries(cfg)) PINNED_HOURS[id] = Array.isArray(v.hours) ? v.hours : [];
       } catch { PINNED = []; }
       let cd = {}, an = {};
       try { cd = JSON.parse(fs.readFileSync(path.join(ROOT,'douyin-auto','vip-cooldown.json'),'utf8')) || {}; } catch {}
       try { an = JSON.parse(fs.readFileSync(path.join(ROOT,'data','anchors.json'),'utf8')) || {}; } catch {}
       // 从日志尾部 60KB 提取每个主播最近一次探测结果，避免整文件读取
+      // 🔴 2026-11-13 15:20 修「指定主播 5 个全显示待探测」：
+      //    这里原来硬编码读 douyin-auto/h35.log —— 那是**单实例时代**的路径，
+      //    自从主实例改用 `--account main`，日志写到 accounts/main/work/h35.log，
+      //    旧文件自 11-11 08:56 起就冻结（尾部全是 cache-cleaner 的 SKIP 行）。
+      //    于是探测行永远匹配不到，面板 5 个指定主播全部停在「· 待探测」，
+      //    用户看到的就是「明明在探却全待探测」。
+      //    修法：与 PATHS.log 一致，扫双实例日志 + 旧路径，按每行时间取**最新**那条。
       const probe = {};
-      try {
-        const lp = path.join(ROOT,'douyin-auto','h35.log');
-        const st = fs.statSync(lp);
-        const start = Math.max(0, st.size - 60000);
-        const fd = fs.openSync(lp, 'r');
-        const buf = Buffer.alloc(st.size - start);
-        fs.readSync(fd, buf, 0, buf.length, start);
-        fs.closeSync(fd);
-        const tail = buf.toString('utf8').split('\n');
-        for (let i = 0; i < tail.length; i++) {
-          const m = tail[i].match(/主动探测 VIP 房 (\S+)/);
-          if (!m) continue;
-          const id = m[1];
-          const at = (tail[i].match(/^\[(\d\d:\d\d:\d\d)\]/) || [])[1] || '';
-          for (let j = i + 1; j < Math.min(i + 4, tail.length); j++) {
-            const live = tail[j].match(/✅ 在播，在线 (\d+)/);
-            if (live) { probe[id] = { state: 'live', online: +live[1], at }; break; }
-            if (/❌ 未在播/.test(tail[j])) { probe[id] = { state: 'offline', at }; break; }
-            if (/⚠️ 探测失败/.test(tail[j])) { probe[id] = { state: 'fail', at }; break; }
+      const _logCands = [
+        path.join(ROOT, 'accounts', 'main', 'work', 'h35.log'),
+        path.join(ROOT, 'accounts', 'main3', 'work', 'h35.log'),
+        path.join(ROOT, 'douyin-auto', 'h35.log'),
+      ];
+      for (const lp of _logCands) {
+        try {
+          const st = fs.statSync(lp);
+          // 只看最近 2 小时内没更新的文件，避免把 11-11 的僵尸日志当成最新状态
+          if (Date.now() - st.mtimeMs > 2 * 3600 * 1000) continue;
+          const start = Math.max(0, st.size - 60000);
+          const fd = fs.openSync(lp, 'r');
+          const buf = Buffer.alloc(st.size - start);
+          fs.readSync(fd, buf, 0, buf.length, start);
+          fs.closeSync(fd);
+          const tail = buf.toString('utf8').split('\n');
+          // 该文件里最后一次 hunter35 启动行之后才算有效（跨天日志复用同一文件）
+          let segStart = 0;
+          for (let i = 0; i < tail.length; i++) if (tail[i].includes('=== hunter35')) segStart = i;
+          for (let i = segStart; i < tail.length; i++) {
+            const m = tail[i].match(/主动探测 VIP 房 (\S+)/);
+            if (!m) continue;
+            const id = m[1];
+            const at = (tail[i].match(/^\[(\d\d:\d\d:\d\d)\]/) || [])[1] || '';
+            for (let j = i + 1; j < Math.min(i + 4, tail.length); j++) {
+              const live = tail[j].match(/✅ 在播，在线 (\d+)/);
+              let hit = null;
+              if (live) hit = { state: 'live', online: +live[1], at };
+              else if (/❌ 未在播/.test(tail[j])) hit = { state: 'offline', at };
+              else if (/⚠️ 探测失败/.test(tail[j])) hit = { state: 'fail', at };
+              if (hit) {
+                // 时间只有 HH:MM:SS，用「时:分:秒」字符串比较足够选当天最新
+                const prev = probe[id];
+                if (!prev || String(at) >= String(prev.at || '')) probe[id] = hit;
+                break;
+              }
+            }
           }
-        }
-      } catch {}
+        } catch {}
+      }
       const now = Date.now();
+      const curHour = new Date().getHours();
       return PINNED.map(([id, fallback, hour]) => {
         const a = an[id] || {};
         const cdTs = cd[id] || 0;
         const coolMin = cdTs ? Math.max(0, Math.round((15*60*1000 - (now - cdTs)) / 60000)) : 0;
         const pr = probe[id] || {};
+        // 🕐 2026-11-13 15:45：区分「不在开播时段所以没探」和「该探却没结果」。
+        //    实测用户看到 5 个全「· 待探测」以为坏了，其实它们的时段是
+        //    20 / 21 / 21 / 22-23 / 0-1 点，白天本来就不该探。混在一起显示会误导。
+        const hrsArr = (PINNED_HOURS[id] || []);
+        const dueNow = hrsArr.length >= 20 || hrsArr.includes(curHour);
         return {
           id,
           name: NAMES[id] || a.host || fallback,
           hour,
+          hours: hrsArr,
+          dueNow,
           state: pr.state || '',
           online: pr.online ?? null,
           probedAt: pr.at || '',
@@ -999,7 +1050,7 @@ const HTML = `<!DOCTYPE html>
   <div><div class="num" id="s-total">-</div><div class="lbl">今日遭遇</div></div>
   <div><div class="num ok" id="s-joined">-</div><div class="lbl">参与成功</div></div>
   <div><div class="num" id="s-wins" style="color:var(--warn)">-</div><div class="lbl">中奖</div></div>
-  <div><div class="num" id="s-rate" style="color:var(--accent)">-</div><div class="lbl">参与率</div></div>
+  <div><div class="num" id="s-rate" style="color:var(--accent)">-</div><div class="lbl">主号参与率 <span id="s-rate-sub" class="dim" style="font-size:10px"></span></div></div>
   <div>
     <div class="lbl" style="margin-bottom:2px">当前监控</div>
     <div style="font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
@@ -1096,7 +1147,18 @@ async function tick(){
     const s = d.stats;
     document.getElementById('s-total').textContent = s.todayTotal;
     document.getElementById('s-joined').textContent = s.todayJoined;
-    document.getElementById('s-rate').textContent = s.rate + '%';
+    // 🎯 顶部参与率改为主号口径（探测号的必然拦截不该稀释真实表现），
+    //    小字保留合计对照；字段缺失时回退原 rate，保持向后兼容。
+    document.getElementById('s-rate').textContent = (s.mainRate != null ? s.mainRate : s.rate) + '%';
+    (function(){
+      const sub = document.getElementById('s-rate-sub');
+      if (!sub) return;
+      if (s.mainRate != null) {
+        sub.textContent = '主 ' + s.mainJoined + '/' + s.mainTotal
+          + ' · 探测号 ' + s.probeJoined + '/' + s.probeTotal
+          + ' · 合计 ' + s.rate + '%';
+      } else sub.textContent = '';
+    })();
     document.getElementById('s-wins').textContent = s.wins;
     document.getElementById('a-total').textContent = s.allTotal;
     document.getElementById('a-joined').textContent = s.allJoined;
@@ -1395,6 +1457,9 @@ async function tick(){
           if (p.state === 'live')   return '<span class="ok">● 在播 ' + (p.online != null ? p.online + ' 人' : '') + '</span>';
           if (p.state === 'offline')return '<span class="dim">○ 未开播</span>';
           if (p.state === 'fail')   return '<span class="warn">◍ 探测超时</span>';
+          // 🕐 不在开播时段 → 说明「本来就不该探」，与「该探却没结果」区分开，
+          //    避免用户白天看到 5 个全「待探测」误判成故障。
+          if (p.dueNow === false)   return '<span class="dim">· 未到时段</span>';
           return '<span class="dim">· 待探测</span>';
         };
         el.innerHTML = d.pinned.map(function (p) {

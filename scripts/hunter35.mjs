@@ -355,9 +355,36 @@ const LOSSES=DATA_DIR+'/losses.jsonl';
 const STRATEGY_LOG=DATA_DIR+'/strategy-log.jsonl';
 try{ fs.mkdirSync(DATA_DIR,{recursive:true}); }catch{}
 const ACCOUNT_TAG=ACCOUNT||'default';
+// 🎯 2026-11-13 15:35 探测号降噪（用户定稿「降噪+降频，保留供粮」）：
+//    根因实测：main3 关注列表只有 14 人，它遇到的关注型福袋几乎必然被判 need-follow
+//    （11-09 用户定稿的硬门禁行为，不是故障）。全天 main3 常驻 4824 次 / 关注拦截
+//    跳过 575 次，往全局流水灌了 193 条 need-follow，把主号 81% 的真实表现稀释成
+//    18.1%，用户看面板以为整体坏了。
+//    做法：**只对已配置为探测号的账号（data/wait-config.json 的 probeQuota 里存在
+//    且 perMsScale<1）**，把它「注定抢不到」的两类结果 need-follow / fans-skip-daytime
+//    不再写入全局 participations/RES，改为写本账号的 probe-skip.jsonl 留证。
+//    ✅ 其它结果（joined 等）照写，看板/报表口径不变；
+//    ✅ 主号不在降噪名单，行为零变化；
+//    ✅ 想恢复原样，把 wait-config.json 里该账号的 perMsScale 改回 1 即自动停止降噪。
+let _QUIET_SKIP=false;
+try{
+  const _wcq=JSON.parse(fs.readFileSync(DATA_DIR+'/wait-config.json','utf8'))||{};
+  const _q=(_wcq.probeQuota||{})[ACCOUNT_TAG]||{};
+  // 显式开关优先（quietSkipResults），缺省时才退回旧的 perMsScale<1 推断。
+  // ⚠ 不能只用 perMsScale 推断：降频会把 perMsScale 调回 1，降噪会跟着失效。
+  _QUIET_SKIP = (_q.quietSkipResults === true)
+    || (_q.quietSkipResults === undefined && Number(_q.perMsScale)>0 && Number(_q.perMsScale)<1);
+}catch{}
+const QUIET_RESULTS=new Set(['need-follow','fans-skip-daytime']);
 const rec=(o)=>{
   const now=new Date().toISOString();
-  try{ fs.appendFileSync(PARTICIPATIONS, JSON.stringify({...o,account:ACCOUNT_TAG,at:now})+'\n'); }catch{}
+  const _quiet=_QUIET_SKIP && QUIET_RESULTS.has(String(o&&o.result||''));
+  if(_quiet){
+    // 留证但不污染全局漏斗：探测号的必然拦截单独归档，排障仍可查
+    try{ fs.appendFileSync(DATA_DIR+'/probe-skip.jsonl', JSON.stringify({...o,account:ACCOUNT_TAG,at:now})+'\n'); }catch{}
+  } else {
+    try{ fs.appendFileSync(PARTICIPATIONS, JSON.stringify({...o,account:ACCOUNT_TAG,at:now})+'\n'); }catch{}
+  }
   // 每实例结果文件也必须带账号：2026-11-04 前漏写，导致看板实例卡片
   // 无法按账号过滤、只能整文件统计，和全局 participations 口径打架。
   try{ fs.appendFileSync(RES, JSON.stringify({...o,account:ACCOUNT_TAG,at:now})+'\n'); }catch{}
@@ -1086,6 +1113,20 @@ async function _ensureFollowImpl(tab, room){
     //    条件刻意保留原 fans-panel 语义不变（st.fansPanel && !st.btn 一律进），
     //    只新增「非浮层 + 未判已关注 + 无按钮 + 头部有粉丝团类组件」这一路。
     if(!st.btn && (st.fansPanel || (!st.followed && /粉丝团|加会员/.test(st.head)))){
+      // 🔴 2026-11-13 15:40 补「fans-panel 重试缺口」（用户定稿 4 项之一）：
+      //    实测 13:52:58 / 14:06:09 两次 fans-panel 拦截后，45s 重试**没有再进入**
+      //    关注列表校验（日志里没有「🔑 进入关注列表校验」），房间就白丢了。
+      //    根因：fetchFollowingSet 自带 10 分钟内存缓存，重试时缓存还没过期，
+      //    拉不到「刚关注/刚被别的进程写入」的主播 → uid 空 + 本地名单陈旧 → 必拦。
+      //    修法：进入校验前，若内存缓存已超过 60s，先强制失效刷新一次再比对。
+      //    ⚠ 仍只在「命中列表」时放行，查不到照旧按 allowInconclusive:false 拦截，
+      //      不放宽硬门禁、不虚报关注成功。
+      try{
+        if(_followingCache && _followingCache.at && (Date.now()-_followingCache.at) > 60000){
+          _localFollow=null; _localFollowMtime=0;   // 本地名单一并重读
+          log('  🔑 关注校验前强制刷新名单（缓存超 60s）');
+        }
+      }catch(e){}
       // 🔴 2026-11-09 22:23 撤回 reload 方案：实测 6 次触发 0 次挽回。
       //    根因是 main3 会话的写操作被服务端限制（同房间对照：主号 163→164 成功、
       //    main3 2→2 不落库），reload 后关注按钮必然回来，再判仍是未关注。
