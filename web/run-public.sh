@@ -63,8 +63,22 @@ kill_stale_tunnel() {
   if [ -n "$p" ]; then
     echo "[public $(date '+%H:%M:%S')] 精确重启僵死隧道 pid=$p"
     kill "$p" 2>/dev/null
-    for _ in 1 2 3 4 5; do kill -0 "$p" 2>/dev/null || break; sleep 1; done
+    # 🔴 2026-11-14 15:50 修：原来只等 5 秒、无强杀兜底。
+    #    实测 cloudflared 卡在 edge 断开态时对 SIGTERM 无响应（01:46 事故：发 TERM 后
+    #    进程仍存活，导致守护误以为隧道还在、永远不重建，公网一直 530）。
+    #    改为：TERM 后等 8 秒，仍在则 SIGKILL，再等 3 秒确认。
+    for _ in 1 2 3 4 5 6 7 8; do kill -0 "$p" 2>/dev/null || break; sleep 1; done
+    if kill -0 "$p" 2>/dev/null; then
+      echo "[public $(date '+%H:%M:%S')] TERM 无效，SIGKILL pid=$p"
+      kill -9 "$p" 2>/dev/null
+      for _ in 1 2 3; do kill -0 "$p" 2>/dev/null || break; sleep 1; done
+    fi
+    if kill -0 "$p" 2>/dev/null; then
+      echo "[public $(date '+%H:%M:%S')] ⚠ 警告：pid=$p 仍存活，本轮跳过重建"
+      return 1
+    fi
   fi
+  return 0
 }
 
 # 只找「指向本只读端口」的 cloudflared，绝不误杀 DSH 的 3080 隧道
@@ -73,11 +87,32 @@ find_tunnel_pid() {
   # Operation not permitted，原 ps|grep 永远返回空 → 守护误判「隧道不在」，
   # 每 10 秒重复 spawn cloudflared，形成隧道风暴。pgrep 在该上下文仍可用。
   # 精确匹配 8898 只读入口，绝不触碰 DSH 的 3080 / 命名隧道。
+  #
+  # 🔴 2026-11-14 15:50 修两处（01:46 公网 530 事故复盘）：
+  #    ① pgrep -f 会连「命令行里恰好含这串字」的进程一起匹配 ——
+  #       实测连巡检用的 `bash -c ...grep tunnel --url...` 都被 pgrep 命中（pid 45777）。
+  #       若把这类 PID 当隧道杀掉，轻则白杀，重则误伤。改为只认**可执行文件是
+  #       cloudflared** 的进程：先取候选 PID，再校验 /proc 式 args 首段以 cloudflared 结尾。
+  #    ② 原来永远 `head -1`，多隧道时只能看见一条 —— 实测 01:47 手动+守护各起一条后
+  #       出现两条同时抢域名，却只能杀到一条。现在返回**全部** PID（空格分隔），
+  #       调用方逐个精确清理。
+  local pids out
   if command -v pgrep >/dev/null 2>&1; then
-    pgrep -f "tunnel --url http://127.0.0.1:$PORT" 2>/dev/null | head -1
+    pids="$(pgrep -f "tunnel --url http://127.0.0.1:$PORT" 2>/dev/null)"
   else
-    ps -eo pid,args 2>/dev/null | grep -F "tunnel --url http://127.0.0.1:$PORT" | grep -v grep | awk '{print $1}' | head -1
+    pids="$(ps -eo pid,args 2>/dev/null | grep -F "tunnel --url http://127.0.0.1:$PORT" | grep -v grep | awk '{print $1}')"
   fi
+  out=""
+  for p in $pids; do
+    [ -z "$p" ] && continue
+    # 必须是 cloudflared 进程，排除 shell 包装层与 grep 自身
+    local a; a="$(ps -o args= -p "$p" 2>/dev/null)"
+    case "$a" in
+      *cloudflared*tunnel*--url*"127.0.0.1:$PORT"*) out="$out $p" ;;
+      *) ;;
+    esac
+  done
+  echo "$out" | tr -s ' ' | sed 's/^ //'
 }
 
 start_tunnel() {
@@ -94,7 +129,21 @@ while true; do
     sleep 3
   fi
   # 每轮都先按命令行查现存 PID：既认领手动起的隧道，也能发现子进程崩溃后重起
-  live_pid=$(find_tunnel_pid)
+  # 🔴 2026-11-14 15:52：find_tunnel_pid 现在返回多条（空格分隔），
+  #    多隧道时只保留第一条作为「主隧道」，其余立刻精确清掉 —— 否则两条
+  #    quick tunnel 同时抢同一个域名，公网会随机 530（01:47 实测过）。
+  live_pids=$(find_tunnel_pid)
+  live_pid=$(echo "$live_pids" | awk '{print $1}')
+  extra_pids=$(echo "$live_pids" | awk '{$1=""; print $0}' | xargs 2>/dev/null)
+  if [ -n "$extra_pids" ]; then
+    echo "[public $(date '+%H:%M:%S')] 发现重复隧道，精确清理: $extra_pids"
+    for xp in $extra_pids; do
+      case "$(ps -o args= -p "$xp" 2>/dev/null)" in
+        *cloudflared*tunnel*--url*"127.0.0.1:$PORT"*) kill -9 "$xp" 2>/dev/null ;;
+      esac
+    done
+    sleep 2
+  fi
   if [ -n "$live_pid" ]; then
     if [ "$live_pid" != "$LAST_TUNNEL_PID" ]; then
       # 新隧道刚起：给 edge 充分生效时间，僵死计数清零
@@ -127,11 +176,19 @@ while true; do
       STALE_STREAK=$((STALE_STREAK + 1))
       echo "[public $(date '+%H:%M:%S')] 公网 HTTP $code 连续 ${STALE_STREAK}/${STALE_CONFIRM} 次"
       if [ "$STALE_STREAK" -ge "$STALE_CONFIRM" ]; then
-        kill_stale_tunnel
-        STALE_STREAK=0
-        LAST_TUNNEL_PID=""
-        # 清空旧域名，避免下一轮拿已失效域名探测误判
-        : > "$URL_FILE"
+        # 🔴 2026-11-14 15:52：按 kill 结果决定后续动作。
+        #    原来无论 kill 成败都清 LAST_TUNNEL_PID + 清空域名文件 → 下一轮
+        #    「发现新 PID」→ 重新计 90 秒宽限 → 问题被掩盖、公网一直挂着。
+        #    现在：只有真的清掉了才重置状态；清不掉就保留域名继续报错。
+        if kill_stale_tunnel; then
+          STALE_STREAK=0
+          LAST_TUNNEL_PID=""
+          # 清空旧域名，避免下一轮拿已失效域名探测误判
+          : > "$URL_FILE"
+        else
+          echo "[public $(date '+%H:%M:%S')] ⚠ 僵死隧道清不掉，保留计数继续告警"
+          STALE_STREAK=$STALE_CONFIRM
+        fi
         sleep 8
       fi
     fi
