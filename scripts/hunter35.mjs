@@ -776,24 +776,30 @@ async function fetchFollowingSet(tab){
     const r = await ev(tab, `(async()=>{try{
       var j=JSON.parse(await (await fetch('/aweme/v1/web/user/profile/self/?device_platform=webapp&aid=6383&_t='+Date.now(),{credentials:'include',cache:'no-store'})).text());
       var u=j.user||{}; if(!u.uid) return JSON.stringify({err:'no-uid'});
-      var all=[],off=0,more=true,p=0;
-      while(more&&p<15){
-        var k=JSON.parse(await (await fetch('/aweme/v1/web/user/following/list/?user_id='+u.uid+'&sec_user_id='+u.sec_uid+'&count=20&offset='+off+'&aid=6383&device_platform=webapp&_t='+Date.now(),{credentials:'include',cache:'no-store'})).text());
-        var arr=k.followings||[];
-          // 🔑 2026-11-11 10:04 同时收昵称：之前只返 uid，导致「uid 拿不到」时
-          //    这套权威数据完全用不上，只能退到可能过期的本地缓存文件。
-          all=all.concat(arr.map(function(x){return {uid:String(x.uid),name:String(x.nickname||'')}}));
-        more=!!k.has_more; off+=20; p++; if(!arr.length)break;
-      }
-      return JSON.stringify({uid:u.uid,cnt:u.following_count,list:all});
-    }catch(e){return JSON.stringify({err:String(e.message).slice(0,80)})}})()`, 30000);
+      // 🔴 2026-11-16 13:35 最终定稿：只拉第一页 20 人，但语义明确——「最近关注的那批」。
+      //    实测结论（不要再来回改）：
+      //    ① offset 翻页被服务端忽略，永远返回同一页 → 旧实现只有 20 人且无法扩充；
+      //    ② max_time 链式翻页能拉全，但相邻页重叠 19/20，要靠 stall>=12 硬扛，
+      //       线上实测拉 293 人要 95 秒以上 —— 福袋倒计时等不起，绝不能放在拦截路径上；
+      //    ③ 决定性实测：**第一页就含最新关注的 20 人**（「魅一」虽在缓存第 283 位，
+      //       也出现在第一页）。而"已关注却被拦"的场景，本质就是「刚关注不久、缓存还没刷到」，
+      //       正好落在第一页覆盖范围内。
+      //    故：保留第一页实时查询（快），配合本地全量缓存（289 人）双保险；
+      //    全量刷新仍交给 health-guard 每小时跑的 refresh-following.mjs --full。
+      var base='/aweme/v1/web/user/following/list/?user_id='+u.uid+'&sec_user_id='+u.sec_uid+'&count=20&aid=6383&device_platform=webapp';
+      var k=JSON.parse(await (await fetch(base+'&_t='+Date.now(),{credentials:'include',cache:'no-store'})).text());
+      var arr=k.followings||[];
+      var all=[];
+      for(var i=0;i<arr.length;i++){ all.push({uid:String(arr[i].uid),name:String(arr[i].nickname||'')}); }
+      return JSON.stringify({uid:u.uid,cnt:u.following_count,list:all,pages:0});
+    }catch(e){return JSON.stringify({err:String(e.message).slice(0,80)})}})()`, 60000);
     const j = JSON.parse(r || '{}');
     if(j.err || !Array.isArray(j.list)) return null;
     _followingCache = { at: now, set: new Set(j.list.map(x=>String(x&&x.uid||'')).filter(Boolean)),
                         names: new Set(j.list.map(x=>String(x&&x.name||'').trim()).filter(Boolean)),
                         uid: String(j.uid||''), cnt: j.cnt,
                         raw: j.list };
-      log(`  🔑 关注列表已缓存：${j.cnt} 人（拉到 ${_followingCache.set.size} 个 uid / ${_followingCache.names.size} 个昵称）`);
+      log(`  🔑 关注列表已拉全：服务端报 ${j.cnt} 人，实拉 ${j.list.length} 条（${_followingCache.set.size} uid / ${_followingCache.names.size} 昵称，${j.pages||0} 次翻页）`);
   }catch(e){ return null; }
 }
 
