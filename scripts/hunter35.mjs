@@ -1174,7 +1174,18 @@ async function _ensureFollowImpl(tab, room){
     //    拦截。DOM 直判 followed 正则不放宽，绝不虚报关注成功。离线验证 6/6 通过。
     //    条件刻意保留原 fans-panel 语义不变（st.fansPanel && !st.btn 一律进），
     //    只新增「非浮层 + 未判已关注 + 无按钮 + 头部有粉丝团类组件」这一路。
-    if(!st.btn && (st.fansPanel || (!st.followed && /粉丝团|加会员/.test(st.head)))){
+    // 🔴 2026-11-17 13:02 修「已关注却被判 fans-panel 拦截」：
+    //    用户指着看板质问「主号不是可以关注吗，需关注就关注啊」。
+    //    实测 12:53 朝暮Always-A / 12:55 可可酱(沪版) 反复被 need-follow 拦下，
+    //    但同一房间用 CDP 实测：still(无关注按钮)=false、hits(粉丝团浮层词)=[]、
+    //    头部有「+加粉丝团」→ 明明是已关注状态。
+    //    根因：本分支排在 st.followed 判定**之前**，只要 st.fansPanel 为真就先进校验，
+    //    校验失败直接 return 拦截，永远走不到下面「st.followed → already」的放行分支。
+    //    而 pages 里「专属礼物/进场特效」这类粉丝团介绍文案在已关注房间也常驻，
+    //    st.fansPanel 因此经常误判为真。
+    //    修法：已关注（st.followed 为真）时不进本分支，让它落到下面的 already 放行。
+    //    ⚠ 不放宽任何硬门禁：st.followed 的判据仍是「页面渲染完成 + 无关注按钮 + 头部有已关注态组件」。
+    if(!st.btn && !st.followed && (st.fansPanel || /粉丝团|加会员/.test(st.head))){
       // 🔴 2026-11-13 15:40 补「fans-panel 重试缺口」（用户定稿 4 项之一）：
       //    实测 13:52:58 / 14:06:09 两次 fans-panel 拦截后，45s 重试**没有再进入**
       //    关注列表校验（日志里没有「🔑 进入关注列表校验」），房间就白丢了。
