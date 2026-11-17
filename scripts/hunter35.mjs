@@ -61,6 +61,12 @@ let _THR={day:8000,night:50000,nightStart:19,nightEnd:24,vipExempt:false};
 try{ _THR=Object.assign(_THR, JSON.parse(fs.readFileSync(DATA_DIR+'/threshold.json','utf8'))||{}); }catch(e){}
 const MIN_ONLINE_DAY=Number(process.env.DY_MIN_ONLINE_DAY||_THR.day);
 const MIN_ONLINE_NIGHT=Number(process.env.DY_MIN_ONLINE_NIGHT||_THR.night);
+// 🔴 2026-11-17 11:10 用户定稿「白天只抢 200 人以下直播间，晚上抢 20000 人以上」：
+//    半个月 1837 次开奖 0 中奖，根因是参与量高度集中在大房——
+//    top10 房间占 43.4%（557481980778 单房 258 次），上万人的房把中奖率稀释到接近 0。
+//    白天改成「上限 200 人、不设下限」抢小房；晚间保持「下限 20000」抢大房不变。
+//    ⚠ dayMax 只在白天生效；0 / 负数 = 不限上限，兼容未写该字段的旧配置。
+const MAX_ONLINE_DAY=Number(process.env.DY_MAX_ONLINE_DAY||_THR.dayMax||0);
 // 📌 2026-11-05 用户要求「按门槛硬卡」：VIP 默认不再豁免 day/night 门槛。
 //    true 才恢复旧的「VIP 只卡 500 人底线」策略；配置在 data/threshold.json 的 vipExempt。
 const VIP_EXEMPT=!!_THR.vipExempt;
@@ -156,6 +162,46 @@ const _skipFansAcc   = Array.isArray(_FOLLOW.skipFansGroupAccounts) ? _FOLLOW.sk
 //    晚间时段（nightStart~nightEnd）恢复原行为，主号仍可加团后参与。
 //    判定用与门槛同一套 NIGHT_START/NIGHT_END，避免两处时段口径不一致。
 const DAY_SKIP_FANS = _FOLLOW.daySkipFansGroup === true;
+// 🔴 2026-11-17 11:10 用户定稿「粉丝团福袋现在只抢加过粉丝团的附带，续粉丝团的也可以抢，
+//    只要是以前加过粉丝团的直播间」：
+//    数据源 data/coin-spend.jsonl（action=join-fans-group，每加一次团记 1 条），
+//    从中提取「本账号历史加过粉丝团的房间号」白名单——在这些房间里遇到粉丝团福袋，
+//    说明可能只是续团/已团员，可以放心抢；没加过的房间一律不碰粉丝团福袋（不花钻）。
+//    ⚠ 白名单按账号隔离：main 加了团不等于 main3 也是团员。
+//    ⚠ 只读历史记录，不写任何文件；启动时加载一次，运行中增量刷新（见 refreshFansJoinedRooms）。
+const FANS_JOINED_ONLY = _FOLLOW.fansJoinedOnly === true;
+let _fansJoinedRooms = new Set();
+let _fansJoinedMtime = 0;
+function loadFansJoinedRooms(){
+  // 从 coin-spend.jsonl 提取本账号加过粉丝团的房间
+  const p=DATA_DIR+'/coin-spend.jsonl';
+  let mt=0;
+  try{ mt=fs.statSync(p).mtimeMs; }catch(e){ return _fansJoinedRooms; }
+  if(_fansJoinedMtime && mt===_fansJoinedMtime) return _fansJoinedRooms;
+  const set=new Set();
+  try{
+    const lines=fs.readFileSync(p,'utf8').split('\n');
+    for(const ln of lines){
+      if(!ln) continue;
+      let r; try{ r=JSON.parse(ln); }catch(e){ continue; }
+      if(!r||!r.room) continue;
+      if(r.action!=='join-fans-group') continue;
+      // 账号归一：数据里主号可能是 default 或 main
+      const acc=String(r.account||'');
+      const mine = ACCOUNT_TAG==='main' ? (acc==='main'||acc==='default') : (acc===ACCOUNT_TAG);
+      if(mine) set.add(String(r.room));
+    }
+  }catch(e){}
+  _fansJoinedRooms=set; _fansJoinedMtime=mt;
+  if(set.size) log(`  🎫 已加粉丝团房间白名单: ${set.size} 个（账号 ${ACCOUNT_TAG}）`);
+  return set;
+}
+function isFansJoinedRoom(room){
+  try{
+    const set=loadFansJoinedRooms();
+    return set.has(String(room||''));
+  }catch(e){ return false; }
+}
 // 🔗 2026-11-10 11:24 用户定稿「每个号的探测资源都是共享的，main3 就可以主要做探测，主号就可以抢」：
 //    现状：vip-cooldown.json / probe-today.json 都在各实例自己的 W 目录下，两号各探各的，
 //    同一房间会被两个号重复探测（浪费各自的探测名额，且更容易触发限流）。
@@ -250,6 +296,16 @@ function getMinOnline(){
   // 晚间 19:00-24:00 用高门槛，凌晨 0-6 点按白天算（人少但仍在播）
   const isNight = (h>=NIGHT_START && h<NIGHT_END);
   return isNight ? MIN_ONLINE_NIGHT : MIN_ONLINE_DAY;
+}
+// 🔴 2026-11-17 11:10 新增：白天「在线人数上限」。
+//    返回 0 表示不限（晚间 / 未配置 dayMax）。
+//    白天只抢小房：人数越少，同时抢的人越少，中奖率越高。
+function getMaxOnline(){
+  const h=new Date().getHours();
+  const isNight = (h>=NIGHT_START && h<NIGHT_END);
+  if(isNight) return 0;                    // 晚间不设上限，只要 >= night 大房
+  const m=MAX_ONLINE_DAY;
+  return (Number.isFinite(m) && m>0) ? m : 0;
 }
 
 // ── 🧠 策略可观测性底座（2026-11-05 21:17）────────────────────────
@@ -375,7 +431,7 @@ try{
   _QUIET_SKIP = (_q.quietSkipResults === true)
     || (_q.quietSkipResults === undefined && Number(_q.perMsScale)>0 && Number(_q.perMsScale)<1);
 }catch{}
-const QUIET_RESULTS=new Set(['need-follow','fans-skip-daytime']);
+const QUIET_RESULTS=new Set(['need-follow','fans-skip-daytime','fans-skip-not-member']);
 const rec=(o)=>{
   const now=new Date().toISOString();
   const _quiet=_QUIET_SKIP && QUIET_RESULTS.has(String(o&&o.result||''));
@@ -1672,6 +1728,16 @@ async function tryJoin(tab,f,url,online){
         out.result = _dayNoFans ? 'fans-skip-daytime' : 'fans-skip-account';
         return out;
       }
+      // 🔴 2026-11-17 11:10 用户定稿「粉丝团福袋只抢加过粉丝团的，续团也抢」：
+      //    只在「本账号以前给这个直播间加过粉丝团」时才参与粉丝团福袋。
+      //    没加过的房间遇到粉丝团福袋 → 记 fans-skip-not-member 跳过，不花钻、不试探。
+      //    判断依据是 coin-spend.jsonl 的历史加团记录（按账号隔离）。
+      //    ⚠ fansJoinedOnly 未配置=false 时保持原行为，零回归风险。
+      if(fans.cnt>0 && FANS_JOINED_ONLY && !isFansJoinedRoom(CURRENT_ROOM)){
+        out.steps.push(`fans-skip-not-member(${CURRENT_ROOM})`);
+        out.result = 'fans-skip-not-member';
+        return out;
+      }
       if(fans.cnt>0){
         // 🧧 2026-11-04 用户解除限制：「粉丝团福袋都可以抢」。
         //    原来是「5 万人在线以上才加入粉丝团」，现在取消人数门槛，
@@ -2087,7 +2153,9 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
       let consecutiveFail=0;
       const good=[];
       const minOnline=getMinOnline();
-      log(`当前门槛: ${minOnline} 人（${isNightNow()?'晚间':'白天'}）`);
+      // 🔴 2026-11-17 11:10 用户定稿：白天上限 200 人（抢小房），晚间 0 = 不限
+      const maxOnline=getMaxOnline();
+      log(`当前门槛: ${minOnline} 人起${maxOnline>0?`、${maxOnline} 人封顶`:'、不设上限'}（${isNightNow()?'晚间':'白天'}）`);
 
       // 🎯 直接用首页在线数筛选（不打开未验证的房间，彻底避免限流）
       const roomOnline=new Map();
@@ -2404,6 +2472,15 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
         const VIP_FLOOR=500;
         const vipExempt = VIP_EXEMPT && isVip && ol>=VIP_FLOOR;
         if(ol>=0 && ol<minOnline && !vipExempt) continue;
+        // 🔴 2026-11-17 11:10 用户定稿「白天只抢 200 人以下直播间」：
+        //    白天（非晚间）对手 maxOnline 生效，人数超上限的房间直接不进池。
+        //    根因：1837 次开奖 0 中奖，参与量集中在上万人的大房，中奖率被稀释到接近 0。
+        //    抢小房（<=200 人）时同场竞争者少，单车中奖率显著更高。
+        //    ⚠ ol<0（探测拿不到人数）不在这里砍，交给下面 _unknownOnline 限额逻辑处理。
+        const _maxOnline = maxOnline;
+        if(_maxOnline>0 && ol>=0 && ol>_maxOnline){
+          continue;
+        }
         // 🔴 2026-11-10 19:16 用户指着看板质问「你还说没问题」后修：
         //    旧逻辑 ol<0（拿不到在线数）一律进池，理由是「进房才能解析到在线数」。
         //    但晚间门槛 50000 时，60 个房间只有 3 个真达标，其余全是 ol=-1，

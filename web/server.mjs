@@ -464,7 +464,7 @@ function buildStatus() {
     if (q.quietSkipResults === undefined && Number(q.perMsScale) > 0 && Number(q.perMsScale) < 1) return true;
     return false;
   };
-  const QUIET_RESULTS = new Set(['need-follow', 'fans-skip-daytime']);
+  const QUIET_RESULTS = new Set(['need-follow', 'fans-skip-daytime', 'fans-skip-not-member']);
   const isQuietNoise = (r) => _quietAcc(r.account || '') && QUIET_RESULTS.has(String(r.result || ''));
   const _allRows = [...readJsonl(PATHS.participations), ...readJsonl(PATHS.legacy).map((r) => ({ ...r, account: 'default' }))];
   const _keptRows = _allRows.filter((r) => !isQuietNoise(r));
@@ -1162,6 +1162,7 @@ const LABEL = {
   'skip-fans':'粉丝团未加入','fans-no-coins':'抖币不足·需充值','fans-unverified':'粉丝团加入未确认','no-panel':'未找到面板',
   // 🕐 2026-11-10 11:42：按账号/时段跳过粉丝团福袋（用户定稿：白天只抢关注型与发弹幕型）
   'fans-skip-daytime':'粉丝团·白天不抢','fans-skip-account':'粉丝团·该账号不抢',
+    'fans-skip-not-member':'粉丝团·未加过不抢',  // 2026-11-17 只抢已加过粉丝团
   'packet-skipped':'人气红包·按配置不抢','need-follow':'需要关注(抢不到)','btn-still':'按钮未消失'
 };
 async function tick(){
@@ -1391,6 +1392,7 @@ async function tick(){
           'skip-fans': ['粉丝团跳过', 'dim'],
           'fans-skip-daytime': ['粉丝团·白天不抢', 'dim'],
           'fans-skip-account': ['粉丝团·该号不抢', 'dim'],
+            'fans-skip-not-member': ['粉丝团·未加过不抢', 'dim'],
           'fans-no-coins': ['抖币不足·需充值', 'warn'],
           'fans-unverified': ['粉丝团加入未确认', 'warn'],
           'need-follow': ['需关注', 'warn'],
