@@ -2748,6 +2748,12 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
               if(blacklist.includes(h.room)) continue;               // 黑名单硬约束不破
               const _min=getMinOnline();
               if(typeof h.online==='number' && h.online>=0 && h.online<_min) continue;  // 门槛硬卡不破
+              // 🔴 2026-11-17 11:50 补漏：热房插队原来只卡下限，绕过了白天 200 人上限。
+              //    实测新策略上线后 main3 仍有 4 次常驻超限房（6295/8274/8629/8629 人），
+              //    全部出自这条通道（日志带「VIP 🏆高频发袋」标记）。
+              //    用户定稿「白天只抢 200 人以下」，热房插队必须同样遵守上限。
+              const _maxI=getMaxOnline();
+              if(_maxI>0 && typeof h.online==='number' && h.online>=0 && h.online>_maxI) continue;
               add.push({room:h.room, online:h.online, isVip:!!h.fudai, host:'',
                         score:roomScore('','',h.online,!!h.fudai)+(h.fudai?40:0), hot:true});
             }
@@ -2927,7 +2933,17 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
           const onlineOK = VIP_EXEMPT
             ? (d.online<0 || d.online>=getMinOnline() || g.isVip)
             : (typeof d.online==='number' && d.online>=getMinOnline());
-          if(d.fudai && !onlineOK){
+          // 🔴 2026-11-17 11:52 第二处补漏：F 值检测阶段原来只卡下限，
+          //    房间在常驻期间人数涨过白天上限后仍会抢福袋。
+          //    用户定稿「白天只抢 200 人以下」，这里必须同步卡上限。
+          //    d.online<0（解析不到人数）不砍：沿用原逻辑按未达标处理，不因上限额外拦截。
+          const _maxGate=getMaxOnline();
+          const _overMax = (_maxGate>0 && typeof d.online==='number' && d.online>=0 && d.online>_maxGate);
+          const _onlineOKFinal = onlineOK && !_overMax;
+          if(d.fudai && _overMax && onlineOK){
+            log(`  ⛔ 白天上限拦截福袋: 在线${d.online} > ${_maxGate} ${disp(g.room)}`);
+          }
+          if(d.fudai && !_onlineOKFinal){
             // 硬卡拦截留痕：否则「看见了福袋却不参与」和「根本没福袋」在日志里长得一样，
             // 又变成 11-03 那种「看不见和没有表现一样」的排查黑洞。每 10 次采样打印一次。
             if(dbgCnt%10===1) log(`  ⛔ 门槛硬卡跳过福袋: 在线${d.online} < ${getMinOnline()} ${g.isVip?'[VIP]':''} ${disp(g.room)}`);
@@ -2956,7 +2972,7 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
             if(typeof _sec==='number'&&_sec>=0) _gateLogged.set(roomStayId,_sec);
             else if(_prev===undefined) _gateLogged.set(roomStayId,-1);
           }
-          if(d.fudai && onlineOK){
+          if(d.fudai && _onlineOKFinal){
             // 🔑 只在倒计时充足时尝试（实测剩余不足180秒的福袋点不开面板）
             var secLeft=(typeof d.fudai.sec==='number')?d.fudai.sec:-1;
             if(secLeft>=0 && secLeft<180){ await sleep(2000); continue; }
