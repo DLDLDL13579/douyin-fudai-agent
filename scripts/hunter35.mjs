@@ -1028,6 +1028,59 @@ async function closePacketPanel(tab){
   }catch(e){ return {closed:false,how:'err',err:String(e.message).slice(0,50)}; }
 }
 
+// 🎁 关闭福袋面板（2026-11-21 22:20 新增，用户「时刻看着屏幕查 bug」时截图抓到）。
+//    问题现场：遇到粉丝团型福袋 → 判定 fans-skip-not-member 跳过 → 直接 return，
+//    **面板留在屏幕上没关**。后果有两个，都被截图/日志钉死：
+//      1. 粉色全屏面板一直挡着直播画面（有头模式下用户直接看到「卡住」）
+//      2. 同一个福袋被反复检测：22:17:15 识别 → 22:17:23 跳过 → 22:18:10 又识别 → 22:18:43 又跳过
+//         因为面板还在，福袋图标就一直在 DOM 里，扫描每轮都能看见它。
+//    与 closePacketPanel（人气红包）是同一类问题，故沿用同一套「× 按钮优先、Esc 兜底」策略。
+//    ⚠ 与 11-09 15:27 那条副作用记录的区别：那次是用 Escape 关**粉丝团引导浮层**，
+//      会让页面多出全局导航层、破坏后续关注验证。这里是关**福袋参与面板**（另一个 DOM），
+//      且优先点面板自带的 × 而不是无脑发 Esc，所以不会触发那次的问题。
+//    ⚠ 关不掉（返回 closed:false）不影响调用方的跳过语义，只多花几百毫秒。
+async function closeFudaiPanel(tab){
+  try{
+    // 先确认面板还在：不在就什么都不做，避免误伤页面上其它 × 按钮
+    const chk=await ev(tab,`(()=>{const b=document.body.innerText||'';
+      return JSON.stringify({has: /参与条件/.test(b) && /福袋/.test(b)})})()`,12000);
+    let has=false; try{ has=JSON.parse(chk||'{}').has===true; }catch(e){}
+    if(!has) return {closed:true,how:'already-closed'};
+
+    // ① 优先点面板自带的关闭按钮（× / ✕ / 关闭）
+    const hit=await ev(tab,`(()=>{
+      for(const el of document.querySelectorAll('div,span,button,i')){
+        const tx=(el.innerText||el.textContent||'').trim();
+        if(tx!=='×'&&tx!=='✕'&&tx!=='关闭')continue;
+        const rc=el.getBoundingClientRect();
+        if(rc.width<12||rc.width>70||rc.height<12||rc.height>70)continue;
+        if(rc.width<=0||rc.height<=0)continue;
+        // 关闭按钮在面板右上或下方居中，排除正文里的「关闭」字样（长条形）
+        if(Math.abs(rc.width-rc.height)>26)continue;
+        return JSON.stringify({x:Math.round(rc.x+rc.width/2),y:Math.round(rc.y+rc.height/2),t:tx});
+      }
+      return JSON.stringify({x:-1,y:-1});
+    })()`,12000);
+    let c={x:-1,y:-1}; try{ c=JSON.parse(hit||'{}'); }catch(e){}
+    if(c.x>0&&c.y>0){
+      await clickXY(tab,c.x,c.y); await sleep(700);
+      const a=await ev(tab,`(()=>{const b=document.body.innerText||'';
+        return JSON.stringify({has: /参与条件/.test(b) && /福袋/.test(b)})})()`,12000);
+      let still=false; try{ still=JSON.parse(a||'{}').has===true; }catch(e){}
+      if(!still) return {closed:true,how:'x-btn'};
+    }
+
+    // ② 兜底 Esc（只发按键，绝不盲点页面中部，避免误触礼物/弹幕/商品卡）
+    await tab.cdp.send('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27}).catch(()=>{});
+    await tab.cdp.send('Input.dispatchKeyEvent',{type:'keyUp',key:'Escape',code:'Escape',windowsVirtualKeyCode:27}).catch(()=>{});
+    await sleep(500);
+    const b2=await ev(tab,`(()=>{const b=document.body.innerText||'';
+      return JSON.stringify({has: /参与条件/.test(b) && /福袋/.test(b)})})()`,12000);
+    let still2=false; try{ still2=JSON.parse(b2||'{}').has===true; }catch(e){}
+    return {closed:!still2,how:'esc'};
+  }catch(e){ return {closed:false,how:'err',err:String(e.message).slice(0,50)}; }
+}
+
 const SCAN=`(()=>{
   var b=document.body.innerText||'';
   // 在线人数有两种文案：
@@ -1737,6 +1790,8 @@ async function tryJoin(tab,f,url,online){
       if(fans.cnt>0 && (_skipFansAcc.includes(ACCOUNT_TAG) || _dayNoFans)){
         out.steps.push(_dayNoFans ? 'fans-skip-daytime' : 'fans-skip-account');
         out.result = _dayNoFans ? 'fans-skip-daytime' : 'fans-skip-account';
+        // 2026-11-21 22:20 同一 bug 的另一处：跳过也必须关面板，否则面板挡画面 + 同福袋被反复检测
+        out.closedPanel = await closeFudaiPanel(tab);
         return out;
       }
       // 🔴 2026-11-17 11:10 用户定稿「粉丝团福袋只抢加过粉丝团的，续团也抢」：
@@ -1747,6 +1802,13 @@ async function tryJoin(tab,f,url,online){
       if(fans.cnt>0 && FANS_JOINED_ONLY && !isFansJoinedRoom(CURRENT_ROOM)){
         out.steps.push(`fans-skip-not-member(${CURRENT_ROOM})`);
         out.result = 'fans-skip-not-member';
+        // 🔴 2026-11-21 22:20 用户「时刻看着屏幕查 bug」时用截图抓到：
+        //    跳过粉丝团福袋后**面板没关**，粉色全屏面板一直挡着直播画面，
+        //    而且同一个福袋 22:17 / 22:18 被反复检测两次（面板在，图标就在）。
+        //    实测证据：22:17:15 识别 → 22:17:23 跳过 → 22:18:10 又识别 → 22:18:43 又跳过。
+        //    根因：这里直接 return，没有关闭已打开的福袋面板。
+        //    修法：跳过前先关面板；关不掉也不影响原有跳过语义（只多一步尝试）。
+        out.closedPanel = await closeFudaiPanel(tab);
         return out;
       }
       if(fans.cnt>0){
