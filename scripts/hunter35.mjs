@@ -2898,9 +2898,17 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
             let n=0;
             // 🖥️ 2026-11-21 22:05 有头模式要能看见直播画面：
             //    无头时暂停视频能显著降 CPU（省的是解码开销）；
-            //    有头时用户就是要看画面，暂停视频等于白开窗口，故不暂停、也不设透明。
-            //    muted 仍然保留：直播声音会打扰用户，且不影响观察。
-            document.querySelectorAll('video').forEach(v=>{try{if(!${HEADED} && !v.paused){v.pause();n++;}v.muted=true;}catch(e){}});
+            //    有头时用户就是要看画面，暂停视频等于白开窗口。
+            // 🔴 22:12 实测补充：仅仅「不主动 pause」是不够的——
+            //    抖音检测到浏览器静音（--mute-audio）后会**自己把视频暂停**，
+            //    实测 paused=true / readyState=4 / currentTime 停在 1.8 不动。
+            //    手动调 play() 后立刻 resumed（currentTime 1.8→94.5），说明流是好的。
+            //    故有头模式改为**主动 play()**，并在每次注入时重复调用（页面重建后会再暂停）。
+            document.querySelectorAll('video').forEach(v=>{try{
+              v.muted=true;
+              if(${HEADED}){ if(v.paused){ v.play().catch(()=>{}); } }
+              else { if(!v.paused){ v.pause(); n++; } }
+            }catch(e){}});
             if(!document.getElementById('__h35_lowcpu')){
               const s=document.createElement('style'); s.id='__h35_lowcpu';
                 // ⚠ 必须排除福袋相关元素：SCAN 用 getBoundingClientRect().width<24 过滤候选，
