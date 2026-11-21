@@ -2097,11 +2097,32 @@ try{fs.rmSync(PROFILE+'/SingletonLock',{force:true});}catch(e){}
 //    len=1918 / cards=120 / needLogin=false 稳定渲染。故默认带 --no-sandbox
 //    （headless 自动化浏览器通用做法，只访问抖音、不涉及账号门禁）；会话恢复正常且
 //    需要强隔离时设 DY_CHROME_NO_SANDBOX=0 关闭。
-const CHROME_ARGS=['--headless=new',`--remote-debugging-port=${PORT}`,`--user-data-dir=${PROFILE}`,
- '--no-first-run','--no-default-browser-check','--disable-gpu',
- '--disable-dev-shm-usage','--window-size=1440,900','--mute-audio','--disable-blink-features=AutomationControlled',
- `--user-agent=${UA}`,'--lang=zh-CN','about:blank'];
+// 🖥️ 2026-11-21 22:05 用户定稿「电脑不用了，把主号换成有头模式，我要看着抢福袋过程」：
+//    新增 DY_CHROME_HEADED=1 开关，只对该实例生效（默认 headless，零回归）。
+//    两者差异与必须同时处理的副作用：
+//      1. 去掉 --headless=new → Chrome 弹真实窗口，可肉眼观察抓取全过程
+//      2. 有头模式不需要 --disable-gpu（headless 下加它是为了绕开 SwiftShader 空转，
+//         有头有真实渲染管道，禁 GPU 反而更慢），故有头时改为启用 GPU
+//      3. 必须加 --start-maximized + 固定 window-position，避免窗口小到看不清
+//      4. --mute-audio 保留：直播声音会打扰用户，且与观察画面无关
+//    伴随改动（同一需求）：降载 CSS 的 video{opacity:0} 在有头模式下会让画面全透明，
+//    等于「开了窗口却看不到直播」，故有头模式跳过 video 透明注入（见 LOWCPU 段）。
+//    ⚠ 有头模式 CPU 明显高于 headless（真实视频解码），仅建议单实例短暂使用；
+//      恢复无头只需去掉环境变量后重启，无代码改动。
+const HEADED = process.env.DY_CHROME_HEADED==='1';
+const CHROME_ARGS=HEADED
+ ? [`--remote-debugging-port=${PORT}`,`--user-data-dir=${PROFILE}`,
+    '--no-first-run','--no-default-browser-check',
+    '--disable-dev-shm-usage','--start-maximized','--window-position=0,0','--mute-audio',
+    '--disable-blink-features=AutomationControlled',
+    `--user-agent=${UA}`,'--lang=zh-CN','about:blank']
+ : ['--headless=new',`--remote-debugging-port=${PORT}`,`--user-data-dir=${PROFILE}`,
+    '--no-first-run','--no-default-browser-check','--disable-gpu',
+    '--disable-dev-shm-usage','--window-size=1440,900','--mute-audio','--disable-blink-features=AutomationControlled',
+    `--user-agent=${UA}`,'--lang=zh-CN','about:blank'];
 if(process.env.DY_CHROME_NO_SANDBOX!=='0') CHROME_ARGS.push('--no-sandbox');
+if(HEADED) log('🖥️ 有头模式已启用：Chrome 会弹出真实窗口，可在屏幕上观察抓取过程');
+else if(process.env.DY_CHROME_HEADED==='0') log('🖥️ 显式指定无头模式（DY_CHROME_HEADED=0）');
 const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
 
 (async()=>{
@@ -2875,7 +2896,11 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
         try{
           await ev(tab,`(()=>{
             let n=0;
-            document.querySelectorAll('video').forEach(v=>{try{if(!v.paused){v.pause();n++;}v.muted=true;}catch(e){}});
+            // 🖥️ 2026-11-21 22:05 有头模式要能看见直播画面：
+            //    无头时暂停视频能显著降 CPU（省的是解码开销）；
+            //    有头时用户就是要看画面，暂停视频等于白开窗口，故不暂停、也不设透明。
+            //    muted 仍然保留：直播声音会打扰用户，且不影响观察。
+            document.querySelectorAll('video').forEach(v=>{try{if(!${HEADED} && !v.paused){v.pause();n++;}v.muted=true;}catch(e){}});
             if(!document.getElementById('__h35_lowcpu')){
               const s=document.createElement('style'); s.id='__h35_lowcpu';
                 // ⚠ 必须排除福袋相关元素：SCAN 用 getBoundingClientRect().width<24 过滤候选，
@@ -2883,7 +2908,7 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
                 //   导致永久 candCount=0 而页面看起来完全正常——这种静默失效最难查。
                 s.textContent='*,*::before,*::after{animation-play-state:paused !important;transition:none !important;}'
                             + '[class*="LMUtLyr9"],[class*="ShortTouch"],[class*="KXLj31kc"],[class*="ycjwPFJI"]{animation-play-state:running !important;}'
-                            + 'video{opacity:0 !important;}';
+                            + (${HEADED} ? '' : 'video{opacity:0 !important;}');
               document.head.appendChild(s);
             }
             // 🔴 2026-11-10 15:29 修复 no-panel 真因（实测截图定位）：
