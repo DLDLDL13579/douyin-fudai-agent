@@ -94,6 +94,12 @@ const DRAW_FALLBACK=Math.max(60,Math.min(3600,Number(_WAIT.drawFallbackSec)||900
 //    用户 2026-11-05 定稿「不设轮数上限」：只要每次等待窗口内还有新福袋就一直留在该房间。
 //    0 表示关闭该行为（回到「守完开奖立即换房」）。不受 scale 影响。
 const POST_DRAW_MS=Math.max(0,Math.min(1800,Number(_WAIT.postDrawWaitSec)||0))*1000;
+// ⏱ 2026-11-21 22:30 新增：福袋剩余多少秒以上才值得尝试参与。
+//    起因：原代码硬编码 180 秒，实测把 91~150 秒的福袋全部白丢（金铲铲小叶 22:26 那轮，
+//    连续 5 次检测到倒计时 150→91 秒却一次没抢，最后判「无福袋」离开；用户手动抢到了）。
+//    60 秒＝留 1 分钟完成「开面板 → 关注/加团 → 点参与」，比 180 秒多抓一大截机会。
+//    缺省 60，可在 data/wait-config.json 写 minSecToTry 覆盖；限幅 10~600 防误配。
+const MIN_SEC_TO_TRY=Math.max(10,Math.min(600,Number(_WAIT.minSecToTry)||60));
 // 📌 关注策略单一数据源：data/follow-config.json（2026-11-05 用户定稿「抢福袋前都需要先关注主播」）。
 //    关注必须在 tryJoin 打开福袋面板「之前」做：面板是全屏遮罩，会挡住左上角关注按钮的
 //    elementFromPoint 命中。实测历史 73 次关注 71 次失败（45 no-btn / 26 clicked-unverified），
@@ -3079,9 +3085,21 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
             else if(_prev===undefined) _gateLogged.set(roomStayId,-1);
           }
           if(d.fudai && _onlineOKFinal){
-            // 🔑 只在倒计时充足时尝试（实测剩余不足180秒的福袋点不开面板）
+            // 🔑 只在倒计时充足时尝试。
+            // 🔴 2026-11-21 22:30 用户反馈「在直播间等很久，手动抢后过一会又切屏」，实测订正：
+            //    原阈值 180 秒，依据是「实测剩余不足180秒的福袋点不开面板」。
+            //    今晚 22:26 金铲铲小叶(yeziyYX) 完整日志推翻了它：
+            //      22:26:07 f={sec:150} ／ 22:26:27 sec:130 ／ 22:26:47 sec:110 ／ 22:27:08 sec:91
+            //      连续 5 次都检测到福袋、倒计时从 150 掉到 91，
+            //      却一次都没触发「★★ 福袋!」，最终 22:27:18 判「时段内无福袋」离开。
+            //    用户手动在同一房间抢到了 → 剩余 91 秒完全够参与，180 秒阈值过于保守。
+            //    改为 60 秒：1 分钟足够开面板 + 关注/加团 + 点参与，不再白丢 60~180 秒的福袋。
+            //    已配置化：data/wait-config.json 的 minSecToTry（缺省 60），现场可调不必改码。
             var secLeft=(typeof d.fudai.sec==='number')?d.fudai.sec:-1;
-            if(secLeft>=0 && secLeft<180){ await sleep(2000); continue; }
+            if(secLeft>=0 && secLeft<MIN_SEC_TO_TRY){
+              if(dbgCnt%10===1) log(`  ⏱ 剩余${secLeft}s < ${MIN_SEC_TO_TRY}s 门槛，本轮不抢 ${disp(g.room)}`);
+              await sleep(2000); continue;
+            }
             // ⚠ 去重必须按时间窗，不能用倒计时做 key。
             //   倒计时每秒都在变（09:56 → 09:44 → 09:25…），拿它当 key 会让同一个福袋
             //   被反复处理：实测 8199758142 的同一个福袋被处理 21 次，统计虚高 20 倍。
