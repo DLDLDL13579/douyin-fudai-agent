@@ -176,15 +176,25 @@ const DAY_SKIP_FANS = _FOLLOW.daySkipFansGroup === true;
 //    ⚠ 白名单按账号隔离：main 加了团不等于 main3 也是团员。
 //    ⚠ 只读历史记录，不写任何文件；启动时加载一次，运行中增量刷新（见 refreshFansJoinedRooms）。
 const FANS_JOINED_ONLY = _FOLLOW.fansJoinedOnly === true;
-let _fansJoinedRooms = new Set();
+let _fansJoinedRooms = new Set();      // 本账号加过团的房间
+let _fansRoomOwner  = new Map();      // 房间 -> 加过团的那个账号（供跨账号参考与日志）
 let _fansJoinedMtime = 0;
 function loadFansJoinedRooms(){
-  // 从 coin-spend.jsonl 提取本账号加过粉丝团的房间
+  // 从 coin-spend.jsonl 提取「加过粉丝团」的房间。
+  // 🔴 2026-11-21 23:00 用户定稿「保留白名单，但自动扩充」：
+  //    原实现严格按账号隔离——main3 加过成成大王(725644733082)，主号仍判 not-member，
+  //    实测 22:17/22:18/22:49 三次把福袋跳过，而用户手动进面板后确实能加团参与。
+  //    粉丝团资格本质是「这个直播间允许加团」，与哪个账号加过无关（各账号本来就各自扣钻）。
+  //    故改为：**任一账号加过该房间，所有账号都视为可尝试**（白名单按房间聚合，不按账号切分）。
+  //    同时保留 _fansRoomOwner 记录是哪个号加的，日志里能追溯来源。
+  //    ⚠ 仍然是「白名单制」而非「无条件加团」：没任何账号加过的房间照旧跳过，
+  //      不会变成见团就花钻。
   const p=DATA_DIR+'/coin-spend.jsonl';
   let mt=0;
   try{ mt=fs.statSync(p).mtimeMs; }catch(e){ return _fansJoinedRooms; }
   if(_fansJoinedMtime && mt===_fansJoinedMtime) return _fansJoinedRooms;
   const set=new Set();
+  const owner=new Map();
   try{
     const lines=fs.readFileSync(p,'utf8').split('\n');
     for(const ln of lines){
@@ -192,15 +202,23 @@ function loadFansJoinedRooms(){
       let r; try{ r=JSON.parse(ln); }catch(e){ continue; }
       if(!r||!r.room) continue;
       if(r.action!=='join-fans-group') continue;
-      // 账号归一：数据里主号可能是 default 或 main
       const acc=String(r.account||'');
-      const mine = ACCOUNT_TAG==='main' ? (acc==='main'||acc==='default') : (acc===ACCOUNT_TAG);
-      if(mine) set.add(String(r.room));
+      // 账号归一：数据里主号可能是 default 或 main
+      const norm = (acc==='main'||acc==='default') ? 'main' : acc;
+      set.add(String(r.room));
+      if(!owner.has(String(r.room))) owner.set(String(r.room), norm);
     }
   }catch(e){}
-  _fansJoinedRooms=set; _fansJoinedMtime=mt;
-  if(set.size) log(`  🎫 已加粉丝团房间白名单: ${set.size} 个（账号 ${ACCOUNT_TAG}）`);
+  _fansJoinedRooms=set; _fansRoomOwner=owner; _fansJoinedMtime=mt;
+  if(set.size){
+    const mineCount=[...owner.values()].filter(v=>v===ACCOUNT_TAG).length;
+    log(`  🎫 已加粉丝团房间白名单: ${set.size} 个（本账号 ${ACCOUNT_TAG} 加过 ${mineCount} 个，其余为别号加过、同样允许尝试）`);
+  }
   return set;
+}
+// 供日志追溯：这间房是哪个号加过的
+function fansJoinedBy(room){
+  try{ loadFansJoinedRooms(); return _fansRoomOwner.get(String(room||''))||null; }catch(e){ return null; }
 }
 function isFansJoinedRoom(room){
   try{
@@ -1696,6 +1714,13 @@ async function joinFansGroup(tab, roomArg){
           note:ok?'加入粉丝团（文案已确认，消耗1抖币）':'加入粉丝团（参与按钮就位，消耗1抖币）'
         })+'\n');
         log(`    💰 已记录加入粉丝团消费: 1 抖币 (${ok?'verified':'joinBtn'})`);
+        // 🔴 2026-11-21 23:00 用户定稿「保留白名单但自动扩充」：
+        //    这里刚写进 coin-spend.jsonl，必须立刻让内存白名单失效并重建，
+        //    否则本轮之后 loadFansJoinedRooms 仍拿旧 Set（mtime 变了但 Set 没重建前，
+        //    isFansJoinedRoom 还是返回 false），同一房间下个福袋又会被 fans-skip-not-member 跳过。
+        //    实测触发场景：成成大王(725644733082) 22:17/22:18/22:49 三次被判 not-member，
+        //    而用户手动加团后明明能抢 —— 白名单没跟上加团动作是其中一环。
+        try{ _fansJoinedMtime=0; _fansJoinedRooms=new Set(); loadFansJoinedRooms(); }catch(e){}
       }catch(e){ log(`    ⚠️ 抖币消费记账失败: ${e.message}`); }
     }
     // 📊 执行能力真实记账：ok / hasJoinBtn 都算真加入（与消费同源），
