@@ -1147,6 +1147,7 @@ const HTML = `<!DOCTYPE html>
     <button class="btn" data-act="start">启动</button>
     <button class="btn" data-act="stop">停止</button>
     <button class="btn" data-act="restart">重启</button>
+    <button class="btn" data-act="next-room" title="立即离开当前直播间，去下一个（无需等待常驻到期）" style="background:linear-gradient(135deg,#3b82f6,#2563eb);border-color:#2563eb">⏭ 下一个房间</button>
   </div>
   <div class="card">
     <span id="act-msg" class="dim" style="font-size:11px">就绪</span>
@@ -1535,10 +1536,13 @@ document.querySelectorAll('.btn').forEach(btn=>{
   btn.addEventListener('click', async ()=>{
     const act = btn.dataset.act;
     if (!act) return;   // 「添加账号」等自有按钮不走这里的 confirm 流程
-    const name = {'start':'启动抓取','stop':'停止抓取','restart':'重启抓取'}[act] || act;
-    if(!confirm('确认要「'+name+'」吗？')) return;
+    // 🕹️ next-room 是高频轻动作，不弹 confirm——否则每次跳过都要确认一次，失去「快速切房」的意义
+    if (act !== 'next-room') {
+      const name = {'start':'启动抓取','stop':'停止抓取','restart':'重启抓取'}[act] || act;
+      if(!confirm('确认要「'+name+'」吗？')) return;
+    }
     const msg = document.getElementById('act-msg');
-    msg.textContent = '执行中...';
+    msg.textContent = act === 'next-room' ? '正在通知换房...' : '执行中...';
     document.querySelectorAll('.btn').forEach(b=>b.disabled=true);
     try{
       const r = await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:act})});
@@ -1632,6 +1636,35 @@ const ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192">
 
 /** 白名单动作：只允许启停，绝不放任意命令 */
 function doAction(action, arg) {
+  // 🕹️ 2026-11-21 22:50 用户定稿：看板加「下一个房间」按钮，有头模式下人工介入换房。
+  //    实现：往每个正在运行的实例的 <W>/cmd/skip-next.json 写一条带时间戳的指令，
+  //    hunter35 在常驻循环第一行轮询该文件（约 2 秒响应），读到即 break 换房。
+  //    为什么用文件：hunter 是阻塞式长循环、不监听端口，走文件天然按账号隔离、无端口冲突。
+  //    ⚠ 只写 running 的实例；已停的实例写了也没人消费，会留 120 秒后自动失效（consumeSkipCommand 有时间窗）。
+  if (action === 'next-room') {
+    const sent = [];
+    const failed = [];
+    try {
+      const accRoot = PATHS.accounts;
+      const list = fs.existsSync(accRoot) ? fs.readdirSync(accRoot) : [];
+      for (const name of list) {
+        const wdir = path.join(accRoot, name, 'work');
+        if (!fs.existsSync(wdir)) continue;      // 只处理该账号确实存在的实例目录
+        try {
+          const cdir = path.join(wdir, 'cmd');
+          fs.mkdirSync(cdir, { recursive: true });
+          fs.writeFileSync(path.join(cdir, 'skip-next.json'),
+            JSON.stringify({ at: new Date().toISOString(), by: 'dashboard' }), 'utf8');
+          sent.push(name);
+        } catch (e) { failed.push(name + ':' + String(e.message).slice(0, 40)); }
+      }
+      if (!sent.length) return { ok: false, error: '没有找到可发送的实例目录（accounts/*/work）' };
+      const tail = failed.length ? `（${failed.length} 个失败）` : '';
+      return { ok: true, output: `已通知 ${sent.join('、')} 换房，约 2 秒内生效${tail}` };
+    } catch (e) {
+      return { ok: false, error: String(e.message).slice(0, 200) };
+    }
+  }
   // 添加账号：必须在后台跑，因为扫码可能要等几分钟，不能卡住看板请求
   if (action === 'account-add') {
     const name = String(arg || '').trim();

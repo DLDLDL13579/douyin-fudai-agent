@@ -568,6 +568,30 @@ let _RETRY_AT=new Map();        // 房间 -> 本次尝试失败后允许重试�
 //    只在 need-follow 时累加；任何一次成功参与都会清零（房间恢复了就该继续抢）。
 let _FOLLOW_FAILS=new Map();
 
+// 🕹️ 2026-11-21 22:50 用户定稿「做无头和有头两种模式，有头时我手动点按钮切下一个直播间，
+//    这样能少等很多时间」：看板加「下一个房间」按钮 → 写指令文件 → hunter 轮询到就立即换房。
+//    为什么用文件而不是 HTTP/IPC：hunter 是阻塞式长循环、没有监听端口，
+//    多开一条 socket 要处理端口冲突/鉴权/跨账号隔离，文件信号最简单且天然按账号隔离。
+//    目录：<W>/cmd/  （W 是该实例自己的工作目录，accounts/<账号>/work 或 douyin-auto）
+//    协议：一次一个请求文件 skip-next.json，内容 {at,from}；消费后立刻删除（原子性足够）。
+//    ⚠ 只在常驻循环里检查（约每 2 秒一轮），不额外开定时器，不影响主流程节奏。
+const CMD_DIR=W+'/cmd';
+function ensureCmdDir(){ try{ fs.mkdirSync(CMD_DIR,{recursive:true}); }catch(e){} }
+// 返回 true 表示「用户要求立刻换房」
+function consumeSkipCommand(){
+  try{
+    const p=CMD_DIR+'/skip-next.json';
+    if(!fs.existsSync(p)) return false;
+    let req=null;
+    try{ req=JSON.parse(fs.readFileSync(p,'utf8')); }catch(e){}
+    try{ fs.unlinkSync(p); }catch(e){}   // 无论内容如何都删，避免坏文件卡住每轮
+    // 只认 120 秒内的请求，避免陈旧文件（比如上次异常退出残留）误触发
+    const at=req&&req.at?Date.parse(req.at):0;
+    if(!at || (Date.now()-at)>120000) return false;
+    return true;
+  }catch(e){ return false; }
+}
+
 class CDP{
   constructor(ws){
     this.ws=ws;this.id=0;this.p=new Map();this.dead=false;this.deadReason='';
@@ -3020,6 +3044,14 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
         let postDrawUnlockPending=false;  // 守完开奖，等旧福袋图标消失后再解锁去重
         let handled=false, nextDiag=30000;
         while(Date.now()-t0<stayBudget){
+          // 🕹️ 2026-11-21 22:50：看板「下一个房间」按钮的人工介入检查点。
+          //    用户在有头模式下能直接看到画面，发现这间房没意思时不必等满 stayBudget，
+          //    点一下按钮就立即换房（常驻最长 90 秒，高峰时段能省不少等待）。
+          //    放在循环第一行：无论页面处于什么状态都能最快响应（约 2 秒内生效）。
+          if(consumeSkipCommand()){
+            log(`  🕹️ 收到人工换房指令，立即离开 ${disp(g.room)}`);
+            break;
+          }
           const d=await ev(tab,SCAN,20000);
           if(!d||d.__err){ await sleep(2000); continue; }
           if(d.exited){ log('已退出'); break; }
