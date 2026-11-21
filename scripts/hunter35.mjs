@@ -2454,6 +2454,15 @@ const chrome=spawn(CHROME,CHROME_ARGS,{stdio:'ignore'});
       const probeList=[...pinnedNow.slice(0,_qPin), ...otherNow.slice(0,_qOth)];
       if(pinnedNow.length) log(`📌 指定主播待探 ${pinnedNow.length} 个（当前 ${curH} 点，按时段优先）`);
       for(const v of probeList){
+        // 🕹️ 2026-11-21 22:55 实测补漏：人工换房指令原先只在「常驻循环」检查，
+        //    但主号有相当多时间耗在「主动探测 VIP 房」阶段（实测 22:53~22:54 连探 4 个房间、
+        //    超过 40 秒都没进常驻），这段时间点按钮完全没反应。
+        //    实测证据：点按钮后 main3 立即响应（它在常驻），main 毫无反应（它在探测）。
+        //    修法：探测循环里也插检查点，收到指令就中止本轮剩余探测，尽快进常驻/换房。
+        if(consumeSkipCommand()){
+          log(`  🕹️ 收到人工换房指令，中止本轮剩余探测`);
+          break;
+        }
         log(`🔍 主动探测 VIP 房 ${v}`);
         const d=await checkOnline(tab,v);
         // 判定在播：能解析到在线人数就是活房间，比页面长度更可靠
