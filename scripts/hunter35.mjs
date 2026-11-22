@@ -1440,14 +1440,32 @@ async function _ensureFollowImpl(tab, room){
           if(!st2 || st2.__err) log(`  ⚠️ reload 重判探针无有效返回（${typeof st2raw}），保持拦截 room=${room}`);
         if(st2 && !st2.__err){
           const btnGone=!st2.btn;
-          const hasFansWord=/加粉丝团|加会员/.test(st2.head||'');
+          // 🔴 2026-11-22 21:10 实测订正：第一版用 /加粉丝团|加会员/，要求「加」字前缀，
+          //    但抖音对部分账号/房间把已关注态文案写成「1粉丝团」「1粉丝团1钻石点亮」，
+          //    不含「加」字 → hasFansWord 恒 false → 三态日志全不打印、静默拦截。
+          //    生产证据（main3 房间 467556348389「静静减脂塑形运动」21:03:26）：
+          //      head = "...15.0万本场点赞|1粉丝团|1粉丝团|1粉丝团|1|粉丝团|粉丝团|..."
+          //      verifyHow 从 fans-panel 变成 no-follow-btn，说明 reload 确实生效，
+          //      只是判据匹配不到新文案。
+          //    ⚠ 主探针 11-13 14:20 已踩过同一个坑并修好（1294 行用 /粉丝团|加会员/），
+          //      我写 reload 探针时复制了旧正则，属重复踩坑。
+          //    修法：与主探针 1294 行保持完全一致。
+          const hasFansWord=/粉丝团|加会员/.test(st2.head||'');
           const renderOk=(st2.bodyLen||0)>=200;
           if(btnGone && hasFansWord && renderOk){
             log(`  ✅ reload 重判为已关注（无关注按钮 + 头部加粉丝团），放行 room=${room}`);
             return {ok:true, reason:'already-after-reload',
               diag:{verifyHow:'already-after-reload',room,bodyLen:st2.bodyLen,head:st2.head}};
           }
-          if(st2.btn) log(`  ⚠️ reload 后出现关注按钮，确认真未关注，保持拦截 room=${room}`);
+          if(st2.btn && !btnGone){
+            log(`  ⚠️ reload 后出现关注按钮，确认真未关注，保持拦截 room=${room}`);
+          } else if(btnGone){
+          // 🔴 2026-11-22 21:10 补兜底留痕：上一版三个分支互斥且都不覆盖
+          //    「有值 + 无错 + 无按钮 + 匹配不到粉丝团文案」这种组合，于是出现
+          //    「日志只打了 reload 重判、三个结果一个都没打」的静默情况，无法定位。
+          //    改为 if/else 全覆盖，任何一次重判都必然留下一条明确结论。
+            log(`  ⚠️ reload 后仍无关注按钮但头部无粉丝团文案（headLen=${(st2.head||'').length}），保持拦截 room=${room}`);
+        }
         }
       }catch(e){ log(`  ⚠️ reload 重判异常: ${String(e.message||e).slice(0,60)}`); }
 
