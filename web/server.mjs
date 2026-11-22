@@ -1641,15 +1641,19 @@ function doAction(action, arg) {
   //    hunter35 在常驻循环第一行轮询该文件（约 2 秒响应），读到即 break 换房。
   //    为什么用文件：hunter 是阻塞式长循环、不监听端口，走文件天然按账号隔离、无端口冲突。
   //    ⚠ 只写 running 的实例；已停的实例写了也没人消费，会留 120 秒后自动失效（consumeSkipCommand 有时间窗）。
+  // 🔴 2026-11-22 12:35 用户定稿「换房只针对主号生效即可」：
+  //    原实现给 accounts/* 下所有账号都写指令，点一次按钮 main3 也跟着换房。
+  //    用户只手动观察主号（有头模式只开在主号），main3 是纯探测号，不该被人为打断节奏。
+  //    故把目标账号收敛为只写 main。
+  const NEXT_ROOM_ACCOUNTS = ['main'];
   if (action === 'next-room') {
     const sent = [];
     const failed = [];
     try {
       const accRoot = PATHS.accounts;
-      const list = fs.existsSync(accRoot) ? fs.readdirSync(accRoot) : [];
-      for (const name of list) {
+      for (const name of NEXT_ROOM_ACCOUNTS) {
         const wdir = path.join(accRoot, name, 'work');
-        if (!fs.existsSync(wdir)) continue;      // 只处理该账号确实存在的实例目录
+        if (!fs.existsSync(wdir)) { failed.push(name + ':目录不存在'); continue; }
         try {
           const cdir = path.join(wdir, 'cmd');
           fs.mkdirSync(cdir, { recursive: true });
@@ -1658,9 +1662,11 @@ function doAction(action, arg) {
           sent.push(name);
         } catch (e) { failed.push(name + ':' + String(e.message).slice(0, 40)); }
       }
-      if (!sent.length) return { ok: false, error: '没有找到可发送的实例目录（accounts/*/work）' };
-      const tail = failed.length ? `（${failed.length} 个失败）` : '';
-      return { ok: true, output: `已通知 ${sent.join('、')} 换房，约 2 秒内生效${tail}` };
+      if (!sent.length) {
+        const why = failed.length ? failed.join('；') : '主号实例目录 accounts/main/work 不存在';
+        return { ok: false, error: `主号未找到，无法换房：${why}` };
+      }
+      return { ok: true, output: '已通知主号换房，约 2 秒内生效' };
     } catch (e) {
       return { ok: false, error: String(e.message).slice(0, 200) };
     }
