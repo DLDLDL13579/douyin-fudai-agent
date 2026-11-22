@@ -1393,6 +1393,54 @@ async function _ensureFollowImpl(tab, room){
           }
         }catch(e){ log(`  ⚠️ 关注校验异常: ${String(e.message||e).slice(0,100)}`); }
       }
+      // 🔴 2026-11-22 12:58 修「已关注仍被判 fans-panel 拦截」（用户截图质问后第 3 次复发）：
+      //    实测房间 17677145028（欣悦有氧健身）主号明明已关注，却连拦 3 次：
+      //      11-14 04:07 main3、11-22 04:32 main3、04:57 主号。
+      //    证据（data/exec-actions.jsonl）：still=false（无关注按钮）+ head 含「+加粉丝团」；
+      //    另做 8 次连续时序采样（3~24 秒）全部是「无关注按钮 + 有加粉丝团」= 稳定已关注态。
+      //    根因：followed 判据带 !fansPanel 条件，而 fansPanel 用整页 body 匹配
+      //    「钻石加入粉丝团|酷炫勋章|专属礼物|进场特效」，这些文案在已关注房间常驻 →
+      //    fansPanel 恒真 → followed 永远算不出来 → 必进本分支并被 inconclusive 拦截。
+      //    11-17 那次只加了 !st.followed，但 st.followed 本身被 !fansPanel 否决，没修好。
+      //
+      //    修法：拦截前做一次 reload 重判，只在「重判后无关注按钮 + 头部有加粉丝团」才放行，
+      //    这正是代码注释里写的已关注持久态判据。
+      //    ⚠ 严禁放宽：reload 后若出现关注按钮 → 说明真未关注，照旧拦截并留痕。
+      //    ⚠ 不改 allowInconclusive、不虚报关注成功；reload 只在本分支触发，不是每袋都 reload。
+      try{
+        log('  🔄 fans-panel 拦截前 reload 重判（排除正文文案误触发）');
+        await tab.cdp.send('Page.reload',{ignoreCache:false}).catch(()=>{});
+        await sleep(3500);
+        // 简化独立探针：reload 后只需回答「有没有关注按钮 + 头部有没有加粉丝团」，
+        // 不依赖原 52 行内联表达式，避免抽取函数的回归风险。
+        const st2=await ev(tab,`(()=>{
+          var b=document.body.innerText||'';
+          var bodyLen=b.length;
+          var head=b.slice(0,600);
+          // 找关注按钮：只用最小判据（文本恰为「关注」且尺寸合理）
+          var btn=null;
+          for(var el of document.querySelectorAll('button,div,span')){
+            var t=(el.innerText||'').trim();
+            if(t!=='关注')continue;
+            var rc=el.getBoundingClientRect();
+            if(rc.width<20||rc.width>200||rc.height<15||rc.height>80)continue;
+            btn={x:Math.round(rc.x+rc.width/2),y:Math.round(rc.y+rc.height/2)};break;
+          }
+          return JSON.stringify({bodyLen:bodyLen,head:head,btn:btn});
+        })()`,25000);
+        if(st2 && !st2.__err){
+          const btnGone=!st2.btn;
+          const hasFansWord=/加粉丝团|加会员/.test(st2.head||'');
+          const renderOk=(st2.bodyLen||0)>=200;
+          if(btnGone && hasFansWord && renderOk){
+            log(`  ✅ reload 重判为已关注（无关注按钮 + 头部加粉丝团），放行 room=${room}`);
+            return {ok:true, reason:'already-after-reload',
+              diag:{verifyHow:'already-after-reload',room,bodyLen:st2.bodyLen,head:st2.head}};
+          }
+          if(st2.btn) log(`  ⚠️ reload 后出现关注按钮，确认真未关注，保持拦截 room=${room}`);
+        }
+      }catch(e){ log(`  ⚠️ reload 重判异常: ${String(e.message||e).slice(0,60)}`); }
+
       // 🔴 2026-11-13：合并后按真实来源区分标签，避免 no-follow-btn 被误记成 fans-panel。
       //    两种情况都保持 inconclusive + 拦截，硬门禁不变。
       const _why = st.fansPanel ? 'fans-panel' : 'no-follow-btn';
