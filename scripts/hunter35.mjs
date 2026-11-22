@@ -1413,7 +1413,7 @@ async function _ensureFollowImpl(tab, room){
         await sleep(3500);
         // 简化独立探针：reload 后只需回答「有没有关注按钮 + 头部有没有加粉丝团」，
         // 不依赖原 52 行内联表达式，避免抽取函数的回归风险。
-        const st2=await ev(tab,`(()=>{
+        const st2raw=await ev(tab,`(()=>{
           var b=document.body.innerText||'';
           var bodyLen=b.length;
           var head=b.slice(0,600);
@@ -1428,6 +1428,16 @@ async function _ensureFollowImpl(tab, room){
           }
           return JSON.stringify({bodyLen:bodyLen,head:head,btn:btn});
         })()`,25000);
+          // 🔴 2026-11-22 16:20 实测修：ev() 返回的是浏览器原始 JSON 字符串（r.result.value），
+          //    不会自动 parse。第一版直接读 st2.head / st2.btn 都是 undefined，导致
+          //    hasFansWord 恒为 false、btnGone 恒为 true → 永远走不到放行分支，
+          //    两个留痕分支也不打印。生产实测 3 次 reload 重判全部只拦不放即此原因。
+          //    ⚠ 不能用 parseEv：它只挑 done/confirm/hasConfirm/hasDone 四个字段，
+          //      会把本探针的 bodyLen/head/btn 全丢掉（同样是隐患，一并避开）。
+          //    修法：就地做通用 JSON 解析，失败则当探针无效处理（保持拦截，不放宽）。
+          let st2=null;
+          try{ st2 = (typeof st2raw==='string') ? JSON.parse(st2raw) : st2raw; }catch(e){ st2=null; }
+          if(!st2 || st2.__err) log(`  ⚠️ reload 重判探针无有效返回（${typeof st2raw}），保持拦截 room=${room}`);
         if(st2 && !st2.__err){
           const btnGone=!st2.btn;
           const hasFansWord=/加粉丝团|加会员/.test(st2.head||'');
