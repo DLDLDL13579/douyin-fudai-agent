@@ -1687,19 +1687,28 @@ function doAction(action, arg) {
     const failed = [];
     try {
       const accRoot = PATHS.accounts;
+      const payload = JSON.stringify({ at: new Date().toISOString(), by: 'dashboard' });
       for (const name of NEXT_ROOM_ACCOUNTS) {
-        const wdir = path.join(accRoot, name, 'work');
-        if (!fs.existsSync(wdir)) { failed.push(name + ':目录不存在'); continue; }
-        try {
-          const cdir = path.join(wdir, 'cmd');
-          fs.mkdirSync(cdir, { recursive: true });
-          fs.writeFileSync(path.join(cdir, 'skip-next.json'),
-            JSON.stringify({ at: new Date().toISOString(), by: 'dashboard' }), 'utf8');
-          sent.push(name);
-        } catch (e) { failed.push(name + ':' + String(e.message).slice(0, 40)); }
+        // 🔧 2026-11-26修复：主号当前是单账号模式，hunter35 的 CMD_DIR = W+'/cmd' = douyin-auto/cmd，
+        //    而旧代码只写 accounts/main/work/cmd → 主号永远读不到，「下一房」按钮从上线起就是坏的。
+        //    同时写两处：douyin-auto/cmd（当前主号实际读取）+ accounts/<name>/work/cmd（账号模式兼容）。
+        const targets = [
+          path.join(ROOT, 'douyin-auto', 'cmd'),
+          path.join(accRoot, name, 'work', 'cmd'),
+        ];
+        let wrote = false;
+        for (const cdir of targets) {
+          try {
+            fs.mkdirSync(cdir, { recursive: true });
+            fs.writeFileSync(path.join(cdir, 'skip-next.json'), payload, 'utf8');
+            wrote = true;
+          } catch (e) { /* 单个目录写失败不影响另一处 */ }
+        }
+        if (wrote) sent.push(name);
+        else failed.push(name + ':两处cmd目录都不可写');
       }
       if (!sent.length) {
-        const why = failed.length ? failed.join('；') : '主号实例目录 accounts/main/work 不存在';
+        const why = failed.length ? failed.join('；') : '主号实例目录不存在';
         return { ok: false, error: `主号未找到，无法换房：${why}` };
       }
       return { ok: true, output: '已通知主号换房，约 2 秒内生效' };

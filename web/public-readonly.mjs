@@ -68,9 +68,16 @@ const server = http.createServer((req, res) => {
         res.end(JSON.stringify({ error: 'public: only next-room allowed', got: act }));
         return;
       }
+      // 🔑 2026-11-26 副作用修复：8899 的 POST 加了 token 鉴权，手机页面从本代理取 HTML，
+      //    token 在 fetch 的 X-Web-Token header 里。代理原只转发 body、重建 headers 时丢了 token，
+      //    导致手机「下一房」被 8899 判 401。这里显式透传该 header（其余 header 仍不转发，权限面不变）。
       const up = http.request(UPSTREAM + ACTION_PATH, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+          ...(req.headers['x-web-token'] ? { 'X-Web-Token': req.headers['x-web-token'] } : {}),
+        },
       }, (ur) => {
         res.writeHead(ur.statusCode || 200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
         ur.pipe(res);
