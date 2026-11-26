@@ -895,7 +895,13 @@ function loadLocalFollow(){
 function isFollowedByName(room){
   try{
     const cache = loadLocalFollow();
-    const set = cache[ACCOUNT_TAG] || cache[ACCOUNT_TAG==='main'?'main':ACCOUNT_TAG];
+    // 🔴 2026-11-26 修复：主号无 --account 时 ACCOUNT_TAG='default'，而刷新任务写的是 'main' 键
+    //    （390人全量），旧代码只取 cache['default']（陈旧8人）→ 已关注被判未关注、白丢福袋。
+    //    default 与 main 是同一个主号，缺失时互通回退；不影响 main3 等其他账号。
+    //    main 键(390人)是刷新任务写的权威全量，default 键(8人)是早期旧数据，故主号优先 main。
+    const set = (ACCOUNT_TAG==='default'||ACCOUNT_TAG==='main')
+      ? (cache['main'] || cache['default'])
+      : cache[ACCOUNT_TAG];
     if(!set || !set.size) return false;
     const name = String(NAMES[room]||'').trim();
     if(!name) return false;
