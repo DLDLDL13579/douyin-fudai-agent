@@ -45,7 +45,9 @@ const req = (port, p, m = 'GET') =>
     r.end();
   });
 
-const ACCOUNTS = [['main', 9750], ['main3', 9752]];
+// 🔴 2026-11-26 单实例适配：用户已取消 main3，把它从关注名单刷新目标里移除。
+//    将来若恢复多账号，在此加回 ['main3',9752] 即可。
+const ACCOUNTS = [['main', 9750]];
 const out = {};
 let any = false;
 

@@ -35,7 +35,8 @@ echo "[进程] hunter=$(ps -eo args|awk '/node hunter35\.mjs/ && !/awk/'|wc -l|t
 supervisor=$(ps -eo args|awk '/bash scripts\/run-h35\.sh/ && !/awk/'|wc -l|tr -d ' ') \
 cache=$(ps -eo args|awk '/run-cache-cleaner\.sh/ && !/awk/'|wc -l|tr -d ' ') \
 runtime=$(ps -eo args|awk '/runtime-cleaner\.sh/ && !/awk/'|wc -l|tr -d ' ') \
-watchdog=$(ps -eo args|awk '/watchdog-down\.sh/ && !/awk/'|wc -l|tr -d ' ')"
+watchdog=$(ps -eo args|awk '/watchdog-down\.sh/ && !/awk/'|wc -l|tr -d ' ') \
+health=$(ps -eo args|awk '/health-guard\.sh/ && !/awk/ && !/bash -c/'|wc -l|tr -d ' ')(应1)"
 
 # 采集端自检（超时保护）
 SELF="$(bash scripts/check-alive.sh 9750 2>&1|tail -1)"

@@ -40,6 +40,10 @@ MEM_WARN="${DY_HEALTH_MEM:-20}"              # 内存空闲百分比下限
 DISK_WARN_GB="${DY_HEALTH_DISK_GB:-5}"       # 磁盘可用下限 GiB
 NOPANEL_PCT="${DY_HEALTH_NOPANEL:-25}"       # no-panel 占比告警线
 NEEDFOLLOW_PCT="${DY_HEALTH_NEEDFOLLOW:-65}" # need-follow 占比告警线
+# 🔴 2026-11-26 单实例适配：用户已明确取消 main3/main2，绝不能再自动拉起。
+#    EXPECTED_HUNTERS=1 表示只跑主号；若将来用户恢复多账号，显式设 =2 才启用 9752 相关逻辑。
+EXPECTED_HUNTERS="${DY_HEALTH_EXPECTED_HUNTERS:-1}"
+MULTI_ACCOUNT=$([ "$EXPECTED_HUNTERS" -ge 2 ] && echo 1 || echo 0)
 
 mkdir -p "$ROOT/douyin-auto"
 
@@ -115,8 +119,8 @@ run_once(){
   n_public=$(cnt 'run-public\.sh')
   n_readonly=$(cnt 'public-readonly\.mjs')
 
-  [ "$n_hunter" -ne 2 ] && { alert A "hunter 进程 $n_hunter 个（期望2）"; fails=$((fails+1)); }
-  [ "$n_sup" -ne 2 ]    && { alert A "supervisor $n_sup 个（期望2）"; fails=$((fails+1)); }
+  [ "$n_hunter" -ne "$EXPECTED_HUNTERS" ] && { alert A "hunter 进程 $n_hunter 个（期望${EXPECTED_HUNTERS}）"; fails=$((fails+1)); }
+  [ "$n_sup" -ne "$EXPECTED_HUNTERS" ]    && { alert A "supervisor $n_sup 个（期望${EXPECTED_HUNTERS}）"; fails=$((fails+1)); }
   [ "$n_cache" -ne 1 ]  && { alert A "cache-cleaner $n_cache 个（期望1）"; fails=$((fails+1)); }
   [ "$n_runtime" -ne 1 ]&& { alert A "runtime-cleaner $n_runtime 个（期望1）"; fails=$((fails+1)); }
   [ "$n_public" -lt 1 ] && { alert A "run-public $n_public 个（期望≥1）"; fails=$((fails+1)); }
@@ -124,20 +128,20 @@ run_once(){
 
   # ── A2 自动拉起（只拉起缺失的，绝不影响正在跑的）────────────────────
   if [ "${DY_HEALTH_AUTOHEAL:-1}" = "1" ]; then
-    if [ "$n_hunter" -lt 2 ] && [ "$n_sup" -lt 2 ]; then
-      say "🔧 自动拉起：hunter/supervisor 缺失"
-      # 主实例
+    if [ "$n_hunter" -lt "$EXPECTED_HUNTERS" ] && [ "$n_sup" -lt "$EXPECTED_HUNTERS" ]; then
+      say "🔧 自动拉起：hunter/supervisor 缺失（期望 ${EXPECTED_HUNTERS}）"
+      # 主实例（单账号模式实际工作目录是 douyin-auto，主号已在跑则不动）
       if [ -n "$(lsof -nP -iTCP:9750 -sTCP:LISTEN 2>/dev/null)" ]; then :; else
-        nohup bash "$ROOT/scripts/run-h35.sh" "$ACC_MAIN" main 9750 \
-          >> "$ACC_MAIN/supervisor.log" 2>&1 < /dev/null &
+        nohup bash "$ROOT/scripts/run-h35.sh" "$ROOT/douyin-auto" \
+          >> "$ROOT/douyin-auto/h35-supervisor.log" 2>&1 < /dev/null &
         say "  → 已拉起主实例"
       fi
       sleep 3
-      # 账号实例
-      if [ -n "$(lsof -nP -iTCP:9752 -sTCP:LISTEN 2>/dev/null)" ]; then :; else
+      # 🔴 账号实例：仅当显式恢复多账号(MULTI_ACCOUNT=1)才拉；默认绝不拉起 main3
+      if [ "$MULTI_ACCOUNT" = "1" ] && [ -z "$(lsof -nP -iTCP:9752 -sTCP:LISTEN 2>/dev/null)" ]; then
         nohup bash "$ROOT/scripts/run-h35.sh" "$ACC_MAIN3" main3 9752 \
           >> "$ACC_MAIN3/supervisor.log" 2>&1 < /dev/null &
-        say "  → 已拉起 main3"
+        say "  → 已拉起 main3（多账号模式）"
       fi
     fi
     if [ "${P8899:-0}" -lt 1 ]; then
@@ -159,7 +163,12 @@ run_once(){
   fi
 
   [ "$p9750" -lt 1 ] && { alert B "9750 未监听"; fails=$((fails+1)); }
-  [ "$p9752" -lt 1 ] && { alert B "9752 未监听"; fails=$((fails+1)); }
+  # 🔴 单实例口径：9752 期望为 0（main3 已取消）；仅多账号模式才要求监听
+  if [ "$MULTI_ACCOUNT" = "1" ]; then
+    [ "$p9752" -lt 1 ] && { alert B "9752 未监听"; fails=$((fails+1)); }
+  else
+    [ "$p9752" -ne 0 ] && { alert B "9752 竟在监听（main3 已取消，不该有）"; fails=$((fails+1)); }
+  fi
   [ "$p9751" -ne 0 ] && { alert B "9751 竟在监听（main2 已删除，不该有）"; fails=$((fails+1)); }
   [ "$p8899" -lt 1 ] && { alert B "看板 8899 未监听"; fails=$((fails+1)); }
   [ "$p8898" -lt 1 ] && { alert B "只读代理 8898 未监听"; fails=$((fails+1)); }
@@ -167,17 +176,23 @@ run_once(){
   # ── C 登录态 ────────────────────────────────────────────────────────
   local a1 a2
   a1=$(bash "$ROOT/scripts/check-alive.sh" 9750 2>&1 | tail -1)
-  a2=$(bash "$ROOT/scripts/check-alive.sh" 9752 2>&1 | tail -1)
   case "$a1" in
     *LOGIN_EXPIRED*) alert C "主号 9750 登录失效：$a1"; fails=$((fails+1));;
     *EMPTY_PAGE*|*SUSPECT*) say "  9750 瞬态：$a1";;
   esac
-  case "$a2" in
-    *LOGIN_EXPIRED*) alert C "main3 9752 登录失效：$a2"; fails=$((fails+1));;
-  esac
+  # 🔴 仅多账号模式才自检 main3（默认已取消）
+  if [ "$MULTI_ACCOUNT" = "1" ]; then
+    a2=$(bash "$ROOT/scripts/check-alive.sh" 9752 2>&1 | tail -1)
+    case "$a2" in
+      *LOGIN_EXPIRED*) alert C "main3 9752 登录失效：$a2"; fails=$((fails+1));;
+    esac
+  fi
 
   # ── D 日志推进（守候期豁免）────────────────────────────────────────
-  for pair in "main:$ACC_MAIN/h35.log" "main3:$ACC_MAIN3/h35.log"; do
+  # 🔴 主号单账号模式实际日志在 douyin-auto/h35.log；多账号模式才看 accounts/main/work
+  local LOG_PAIRS="main:$ROOT/douyin-auto/h35.log"
+  [ "$MULTI_ACCOUNT" = "1" ] && LOG_PAIRS="$LOG_PAIRS main3:$ACC_MAIN3/h35.log"
+  for pair in $LOG_PAIRS; do
     local acc="${pair%%:*}" f="${pair#*:}"
     [ -f "$f" ] || { alert D "$acc 日志不存在"; fails=$((fails+1)); continue; }
     local age=$(( $(date +%s) - $(stat -f '%m' "$f") ))
@@ -252,7 +267,7 @@ run_once(){
   #    只有 load 超阈值 **且** 日志确实停滞，才判定为自己这边出问题。
   if [ "${load_i:-0}" -gt "$LOAD_WARN" ]; then
     local _stalled=0
-    for pair in "main:$ACC_MAIN/h35.log" "main3:$ACC_MAIN3/h35.log"; do
+    for pair in $LOG_PAIRS; do
       local _f="${pair#*:}"
       [ -f "$_f" ] || continue
       local _age=$(( $(date +%s) - $(stat -f '%m' "$_f") ))
@@ -367,7 +382,7 @@ run_once(){
 
   # ── 心跳 ────────────────────────────────────────────────────────────
   if [ "$fails" -eq 0 ]; then
-    say "✅ 全项正常 | hunter=$n_hunter sup=$n_sup 端口 9750=$p9750 9752=$p9752 8899=$p8899 | 今日 ${e_total}条 no-panel=${e_np}% need-follow=${e_nf}% joined=${e_jn}% | load5=${load5} 内存=${memfree}% 磁盘=${disk_gb}Gi"
+    say "✅ 全项正常 | 模式=$([ "$MULTI_ACCOUNT" = "1" ]&&echo 多账号||echo 单实例) hunter=$n_hunter sup=$n_sup 端口 9750=$p9750 $([ "$MULTI_ACCOUNT" = "1" ]&&echo "9752=$p9752 "||echo "9752=0(已取消) ")8899=$p8899 | 今日 ${e_total}条 no-panel=${e_np}% need-follow=${e_nf}% joined=${e_jn}% | load5=${load5} 内存=${memfree}% 磁盘=${disk_gb}Gi"
   else
     say "⚠️ 本轮 $fails 项异常"
   fi
