@@ -1739,6 +1739,12 @@ function doAction(action, arg) {
   if (action === 'account-use') {
     const name = String(arg || '').trim();
     if (!/^[A-Za-z0-9_\u4e00-\u9fa5-]{1,20}$/.test(name)) return { ok: false, error: '账号名非法' };
+    // 🔴 2026-11-26 安全加固：main/default 就是当前主号自己，"切换到自己"会用 accounts/main
+    //    里可能陈旧的 profile 覆盖今天活跃的登录态（实测旧 Cookies 比现用 profile 老 2 天），
+    //    一旦覆盖可能导致掉线需重新扫码。此操作对单实例无意义，直接拒绝。
+    if (name === 'main' || name === 'default') {
+      return { ok: false, error: '当前就是主号单实例，无需切换；为避免用旧登录态覆盖现用 profile，已拒绝此操作' };
+    }
     const srcDir = path.join(PATHS.accounts, name, 'profile', 'Default');
     const dstDir = path.join(ROOT, 'douyin-auto', 'chrome-profile', 'Default');
     if (!fs.existsSync(srcDir)) return { ok: false, error: `账号「${name}」没有登录数据` };
