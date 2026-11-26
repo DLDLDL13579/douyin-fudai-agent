@@ -20,7 +20,9 @@ if [ "$1" != "full" ] && [ "$BOOT" = "$BASE_BOOT" ]; then
 fi
 
 echo "=== 抖音福袋巡检 $NOW ==="
-echo "[系统] boot=$BOOT load=$LOAD1 free=$(memory_pressure 2>/dev/null|grep 'free percentage'|sed 's/.*: //') 磁盘=$(df -h /|tail -1|awk '{print $4}')"
+# 2026-11-26 扩展巡检范围：inode/swap（曾遇磁盘事故）、安全回归（防key泄露与鉴权失效复发）
+echo "[系统] boot=$BOOT load=$LOAD1 free=$(memory_pressure 2>/dev/null|grep 'free percentage'|sed 's/.*: //') \
+磁盘=$(df -h /|tail -1|awk '{print $4}') inode=$(df -i /|tail -1|awk '{print $5}') swap=$(sysctl -n vm.swapusage 2>/dev/null|grep -oE 'used = [0-9.]+M'|head -1)"
 
 # 端口（只列关键端口）
 printf '[端口] '
@@ -68,5 +70,18 @@ POST=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 -X POST "$PUB/api/st
 else
   echo "[公网] 无域名文件"
 fi
+
+# 公网隧道进程数：公网 000 时能区分「隧道死了」vs「域名失效」
+echo "[隧道] 8898隧道=$(ps -eo args|grep -F 'tunnel --url http://127.0.0.1:8898'|grep -v grep|grep -v 'bash -c'|wc -l|tr -d ' ') \
+DSH隧道=$(ps -eo args|grep -F 'cloudflared tunnel'|grep -v grep|grep -v 'bash -c'|wc -l|tr -d ' ')（DSH不可动）"
+
+# 安全回归（2026-11-26 P0 修复防复发）：仓库明文key必须空、web POST鉴权必须在
+SEC_KEY=$(grep -oE '"sendKey": "[^"]*"' data/notify-config.json 2>/dev/null|grep -v '""'|wc -l|tr -d ' ')
+SEC_TOKEN=$(grep -c "WEB_TOKEN" web/server.mjs 2>/dev/null|tr -d ' ')
+echo "[安全] 仓库明文key=$SEC_KEY(应0) web鉴权=$SEC_TOKEN(应>0) .env.local=$([ -f .env.local ]&&echo 有||echo 无)"
+
+# 内存大户（2026-11-26 根因修正）：Parallels 曾占13.9GB致系统狂换页load飙到300。内存中>4GB即告警。
+TOPMEM="$(ps -eo rss,comm -r 2>/dev/null|awk 'NR>1 && NR<=4 && $1>4*1024*1024{printf "%s(%.1fG) ",$2,$1/1024/1024}')"
+[ -n "$TOPMEM" ] && echo "[⚠内存大户] $TOPMEM —— 考虑关掉/调小虚拟机，这是load飙升主因"
 
 echo "[中奖] $(cat data/wins.jsonl 2>/dev/null|wc -l|tr -d ' ') 条"
