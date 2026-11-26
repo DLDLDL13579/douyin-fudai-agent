@@ -2735,6 +2735,10 @@ main2（11-06）、main3（11-24）取消后，多账号时代的代码大量残
 - Server酱 sendKey 曾明文提交进 git（commit 6b46d46）：迁到 gitignore 的
   `.env.local`，三层 fallback（环境变量→.env.local→旧配置兼容）。
   **代码改了救不回历史里的 key，必须去 Server酱后台重置才是真止损。**
+  **推送链路验证法（不消耗配额）**：`node scripts/notify-serverchan.mjs --from-hunter
+  --title t --desp d --dry` 三个入口都应显示 `SCT...` 前 8 位；手工 `--win` 即使
+  不加 `--confirm` 也必须被强制 dry-run 且标题带【测试】——这是「不造假中奖消息、
+  不浪费用户消息资源」的防呆，用户曾明确批评过假通知，改推送代码后必须回归这条。
 - 看板 POST `/api/action` 无鉴权（同 WiFi 任意设备可启停）：随机 token 注入前端、
   POST 校验。副作用：公网只读代理只转 body 不转 header，手机「下一房」被 401 —
   必须透传 `X-Web-Token`；且 `next-room` 旧版只写 `accounts/main/work/cmd`，
