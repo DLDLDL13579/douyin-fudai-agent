@@ -1300,6 +1300,21 @@ async function _ensureFollowImpl(tab, room){
       return {followed, btn, bodyLen, fansPanel:fansPanel, head:head.slice(0,120), domBtn:domBtn, coordOnly:!!(btn&&!domBtn)};
     })()`, 25000);
     if(!st || st.__err) return {ok:false,inconclusive:true,reason:'probe-fail'};
+    // 🔴 2026-11-26 修「已关注却被 fans-panel 白丢」：服务端关注名单是权威（11-10 定稿）。
+    //    实证今日 11 次 pre-follow:fans-panel 拦截的主播**全部**在 main 键 391 人名单里
+    //    （瑶瑶415 uid=135938194540948 完全匹配）。根因：页面正文的粉丝团介绍文案
+    //    「钻石加入粉丝团/酷炫勋章/专属礼物」让探针误判有「关注」按钮 → 走点击路径 →
+    //    验证表达式又因 fansPanel 返回 inconclusive → need-follow 白丢真已关注福袋。
+    //    1331 行的权威校验要求 !st.btn（无按钮）才进，这些房间误判有按钮故绕过了它。
+    //    修法：探针后立刻用权威名单判一次，命中即放行（未关注的不在名单，仍走原拦截）。
+    //    只在名单命中时放行，不放宽任何硬门禁、不虚报关注成功。
+    try{
+      if(!st.followed && isFollowedByName(room)){
+        log(`  🔑 抢前权威名单命中：${NAMES[room]||room} 已关注，直接放行（绕过 fans-panel 误判）`);
+        return {ok:true, reason:'already-by-name-precheck',
+          diag:{verifyHow:'already-by-name-precheck',room,bodyLen:st.bodyLen,head:st.head}};
+      }
+    }catch(e){ /* 名单查询失败不影响原流程 */ }
     // 浮层期间不下结论：既不能判已关注，也不能判「无按钮可点」，交给短冷却重试
     //    ⚠ 2026-11-09 16:29 决定性对照订正：粉丝团浮层是「点击关注后」才弹出的引导，
     //    实测 8 秒不自动消失、只有 reload 才消失。16:05 曾假设它是会自动消失的瞬态、
