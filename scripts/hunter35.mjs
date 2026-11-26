@@ -216,7 +216,10 @@ function loadFansJoinedRooms(){
   }catch(e){}
   _fansJoinedRooms=set; _fansRoomOwner=owner; _fansJoinedMtime=mt;
   if(set.size){
-    const mineCount=[...owner.values()].filter(v=>v===ACCOUNT_TAG).length;
+    // 日志显示修正：owner 里主号归一为 'main'，而主号 ACCOUNT_TAG 是 'default'，
+    //    旧比较导致日志常年显示「本账号 default 加过 0 个」（实际加过上百次），误导巡检。
+    const _tagNorm=(ACCOUNT_TAG==='default'||ACCOUNT_TAG==='main')?'main':ACCOUNT_TAG;
+    const mineCount=[...owner.values()].filter(v=>v===_tagNorm).length;
     log(`  🎫 已加粉丝团房间白名单: ${set.size} 个（本账号 ${ACCOUNT_TAG} 加过 ${mineCount} 个，其余为别号加过、同样允许尝试）`);
   }
   return set;
