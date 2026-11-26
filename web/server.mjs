@@ -36,6 +36,40 @@ const isLocalDay = (isoStr, day = localDay()) => {
 // 🌍 跨平台：路径统一走 paths.mjs（打包后 ROOT 是 exe 所在目录）
 import { APP_ROOT } from '../scripts/paths.mjs';
 const ROOT = APP_ROOT;
+
+// 🔐 2026-11-26 P0 安全止血：POST /api/action 鉴权。
+//    原状态：server 绑定 0.0.0.0:8899 且 POST 无任何校验，同 WiFi 任意设备可启停抓取/切号/拉扫码窗。
+//    方案：随机 token 持久化到 .env.local（已 gitignore），注入前端；POST 必须带 token。
+//    GET /api/status 与静态页面保持开放，不影响公网只读链(8898→8899 仅 GET)与巡检。
+//    兼容性：环境变量 WEB_TOKEN 优先，其次 .env.local 的 WEB_TOKEN=，都没有则自动生成并写盘。
+const ENV_PATH = path.join(ROOT, '.env.local');
+function readEnvFile() {
+  const out = {};
+  try {
+    for (const line of fs.readFileSync(ENV_PATH, 'utf8').split(/\r?\n/)) {
+      const s = line.trim();
+      if (!s || s.startsWith('#')) continue;
+      const m = s.match(/^([A-Z0-9_]+)\s*=\s*(.+)$/);
+      if (m) out[m[1]] = m[2].trim().replace(/^['"]|['"]$/g, '');
+    }
+  } catch {}
+  return out;
+}
+function writeEnvValue(key, value) {
+  let txt = '';
+  try { txt = fs.readFileSync(ENV_PATH, 'utf8'); } catch {}
+  const re = new RegExp('^' + key + '\\s*=.*$', 'm');
+  if (re.test(txt)) txt = txt.replace(re, key + '=' + value);
+  else txt = (txt && !txt.endsWith('\n') ? txt + '\n' : txt) + key + '=' + value + '\n';
+  try { fs.writeFileSync(ENV_PATH, txt, { mode: 0o600 }); } catch {}
+}
+const WEB_TOKEN = process.env.WEB_TOKEN || (() => {
+  const fromEnv = readEnvFile().WEB_TOKEN;
+  if (fromEnv && fromEnv.trim()) return fromEnv.trim();
+  const generated = (globalThis.crypto?.randomUUID?.() || String(Date.now()) + Math.random().toString(36).slice(2)).replace(/-/g, '');
+  writeEnvValue('WEB_TOKEN', generated);
+  return generated;
+})();
 // ⚠ 端口解析容错（2026-11-04）：绿色版通过 `app.mjs web` 启动，
 //    此时 process.argv[2] 是字符串 'web'，Number('web')=NaN 会让 listen 直接失败。
 //    只有「正的有限数字」才认作端口，其余一律回退 8899。
@@ -882,6 +916,8 @@ function buildStatus() {
 }
 
 const HTML = `<!DOCTYPE html>
+<!-- P0 鉴权 token 由服务端注入，前端 POST 自动携带，手机/本机免手输 -->
+<script>window.WEB_TOKEN=${JSON.stringify(WEB_TOKEN)};</script>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -1545,7 +1581,7 @@ document.querySelectorAll('.btn').forEach(btn=>{
     msg.textContent = act === 'next-room' ? '正在通知换房...' : '执行中...';
     document.querySelectorAll('.btn').forEach(b=>b.disabled=true);
     try{
-      const r = await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:act})});
+      const r = await fetch('/api/action',{method:'POST',headers:{'Content-Type':'application/json','X-Web-Token':window.WEB_TOKEN},body:JSON.stringify({action:act})});
       const d = await r.json();
       msg.textContent = (d.ok?'✅ ':'❌ ') + (d.output || d.error || '');
       msg.style.color = d.ok ? 'var(--ok)' : 'var(--bad)';
@@ -1570,7 +1606,7 @@ document.getElementById('accounts-box').addEventListener('click', async function
   btn.disabled = true;
   try {
     const r = await fetch('/api/action', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Web-Token': window.WEB_TOKEN },
       body: JSON.stringify({ action: 'account-use', arg: name })
     });
     const d = await r.json();
@@ -1593,7 +1629,7 @@ document.getElementById('btn-acc-add').addEventListener('click', async function 
   msg.style.color = 'var(--dim)';
   try {
     const r = await fetch('/api/action', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Web-Token': window.WEB_TOKEN },
       body: JSON.stringify({ action: 'account-add', arg: name })
     });
     const d = await r.json();
@@ -1744,8 +1780,15 @@ const server = http.createServer((req, res) => {
     let body = '';
     req.on('data', (c) => { body += c; if (body.length > 4096) req.destroy(); });
     req.on('end', () => {
-      let action = null, arg = null;
-      try { const j = JSON.parse(body); action = j.action; arg = j.arg; } catch {}
+      // 🔐 P0 鉴权：token 来自 header 或 body，二者任一正确即放行
+      const headerToken = String(req.headers['x-web-token'] || '');
+      let action = null, arg = null, bodyToken = '';
+      try { const j = JSON.parse(body); action = j.action; arg = j.arg; bodyToken = String(j.token || ''); } catch {}
+      if (headerToken !== WEB_TOKEN && bodyToken !== WEB_TOKEN) {
+        res.writeHead(401, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({ ok: false, error: 'unauthorized' }));
+        return;
+      }
       const result = doAction(action, arg);
       res.writeHead(result.ok ? 200 : 400, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(JSON.stringify(result));

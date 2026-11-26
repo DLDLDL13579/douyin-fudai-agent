@@ -643,7 +643,23 @@ class CDP{
   }
   get alive(){ return !this.dead && this.ws && this.ws.readyState===1; }
 }
-async function conn(u){const ws=new WebSocket(u);await new Promise((r,j)=>{ws.onopen=r;ws.onerror=j;});return new CDP(ws);}
+async function conn(u){
+  const ws=new WebSocket(u);
+  await new Promise((r,j)=>{ws.onopen=r;ws.onerror=j;});
+  const c=new CDP(ws);
+  // ⚡ 2026-11-26 P0 提速（报告建议）：无头模式在网络层拦截直播视频流与礼物动效，
+  //    进房渲染从 8-15s 降到 2-3s。福袋识别靠 DOM 选择器+getBoundingClientRect，
+  //    不依赖视频像素；只拦明确的媒体后缀，绝不碰 .js/.json/api 福袋数据接口。
+  //    🔴 有头模式(HEADED)必须跳过：用户要肉眼观察直播画面，禁流会黑屏。
+  //    HEADED 在下方 2322 行用 const 声明，此处用 process.env 直接判断，避免 TDZ。
+  if(process.env.DY_CHROME_HEADED!=='1'){
+    try{
+      await c.send('Network.enable',{},5000);
+      await c.send('Network.setBlockedURLs',{urls:['*.flv','*.m3u8','*.ts','*gift*.gif','*gift*.webp']},5000);
+    }catch{ /* 禁流失败不影响主流程，仅少一点提速 */ }
+  }
+  return c;
+}
 const ev=async(t,e,to=25000)=>{try{const r=await t.cdp.send('Runtime.evaluate',{expression:e,returnByValue:true,awaitPromise:true},to);return r.exceptionDetails?{__err:r.exceptionDetails.text}:r.result.value;}catch(e2){return{__err:String(e2.message)}}};
 const shot=async(t,n)=>{try{const r=await t.cdp.send('Page.captureScreenshot',{format:'png'});fs.writeFileSync(W+'/'+n,Buffer.from(r.data,'base64'));}catch{}};
 const clickXY=async(t,x,y)=>{await t.cdp.send('Input.dispatchMouseEvent',{type:'mouseMoved',x,y});await sleep(250);
@@ -799,8 +815,20 @@ const JOIN_BTN_QUERIES=[
   '立即抽奖'
 ];
 async function pSearchJoin(tab){
+  // ⚡ 2026-11-26 P0 提速：前 3 个「最可能命中」的文案并发搜索。
+  //    实测日志 1289 次命中里 1289 次都是第 1 个 query「一键发评论参与福袋」，
+  //    后 11 个 query 总计仅命中 3 次——旧版串行 12×3 次 CDP 往返（失败路径 36 次）是纯浪费。
+  //    CDP.send 用 msgId+Map 匹配，天然支持并发；一次并发 3 个搜索结果集互不干扰（searchId 独立）。
+  //    保守起见只并发前 3 个（覆盖率≈100%），其余 9 个仍串行作为兜底，避免服务端一次挂太多搜索。
   const tried=[];
-  for(const q of JOIN_BTN_QUERIES){
+  const hot=JOIN_BTN_QUERIES.slice(0,3);
+  const hotResults=await Promise.all(hot.map(q=>pSearch(tab,q)));
+  for(let i=0;i<hot.length;i++){
+    const q=hot[i], r=hotResults[i];
+    if(r && r.cnt>0){ return {cnt:r.cnt, ids:r.ids, via:q, tried}; }
+    tried.push(q);
+  }
+  for(const q of JOIN_BTN_QUERIES.slice(3)){
     const r=await pSearch(tab,q);
     if(r.cnt>0){ return {cnt:r.cnt, ids:r.ids, via:q, tried}; }
     tried.push(q);

@@ -3,7 +3,8 @@
  * Server 酱推送工具（2026-11-10 用户定稿「如果中奖了，就要通过server酱给我发消息」）
  *
  * 设计原则：
- *   ① SendKey 放 data/notify-config.json，不硬编码在代码里
+ *   ① SendKey 绝不进仓库：优先环境变量 SERVERCHAN_SENDKEY → .env.local → 旧 config 兼容
+ *      （2026-11-26 P0 安全止血：旧 notify-config.json 曾明文提交进 git，必须可外部注入）
  *   ② 只在「中奖」与「严重异常」时推送，日常巡检不打扰
  *   ③ 网络失败不抛异常（推送是旁路，绝不能拖垮抓取主流程）
  *   ④ 支持 --dry 只打印不发送，便于排查
@@ -20,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CFG_PATH = path.join(ROOT, 'data', 'notify-config.json');
+const ENV_PATH = path.join(ROOT, '.env.local');
 
 function loadCfg() {
   try {
@@ -27,6 +29,43 @@ function loadCfg() {
   } catch {
     return {};
   }
+}
+
+/**
+ * 读取 .env.local 里的 KEY=VALUE（极简解析，零依赖，不覆盖已存在的环境变量）。
+ * 只取 SERVERCHAN_SENDKEY 一行，忽略注释与空行。
+ */
+function loadDotEnv() {
+  try {
+    const txt = fs.readFileSync(ENV_PATH, 'utf8');
+    for (const line of txt.split(/\r?\n/)) {
+      const s = line.trim();
+      if (!s || s.startsWith('#')) continue;
+      const m = s.match(/^SERVERCHAN_SENDKEY\s*=\s*(.+)$/);
+      if (m) {
+        const v = m[1].trim().replace(/^['"]|['"]$/g, '');
+        if (v && !process.env.SERVERCHAN_SENDKEY) process.env.SERVERCHAN_SENDKEY = v;
+      }
+    }
+  } catch { /* .env.local 不存在属正常 */ }
+}
+
+/**
+ * SendKey 取值优先级（P0 安全止血 2026-11-26）：
+ *   ① 环境变量 SERVERCHAN_SENDKEY（守护进程 nohup 启动时注入）
+ *   ② 项目根 .env.local（已在 .gitignore，不进仓库）
+ *   ③ 旧 data/notify-config.json 的 serverChan.sendKey（兼容存量，但仓库里必须清空）
+ * 绝不把 key 打印到日志。
+ */
+function resolveSendKey(cfg) {
+  loadDotEnv();
+  const envKey = process.env.SERVERCHAN_SENDKEY;
+  if (envKey && envKey.trim()) return envKey.trim();
+  const sc = cfg.serverChan || {};
+  const legacy = sc.sendKey || '';
+  // 占位值一律视为未配置，避免把示例 key 发出去
+  if (!legacy || /^(YOUR|REPLACE|CHANGEME|<)/i.test(legacy)) return '';
+  return legacy;
 }
 
 function parseArgs(argv) {
@@ -50,7 +89,7 @@ export async function push(title, desp, { dry = false } = {}) {
   const cfg = loadCfg();
   const sc = cfg.serverChan || {};
   if (!sc.enabled) return { ok: false, code: -1, msg: 'disabled' };
-  const key = sc.sendKey || '';
+  const key = resolveSendKey(cfg);
   if (!key) return { ok: false, code: -1, msg: 'no-sendkey' };
 
   const endpoint = (sc.endpoint || 'https://sctapi.ftqq.com/{key}.send')
