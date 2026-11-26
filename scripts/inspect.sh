@@ -63,20 +63,23 @@ if [ "$H" -ne 2 ] || [ "$S" -ne 2 ]; then
 fi
 C=$(cnt 'run-cache-cleaner\.sh'); R=$(cnt 'runtime-cleaner\.sh')
 P=$(cnt 'run-public\.sh'); RO=$(cnt 'public-readonly\.mjs'); HG=$(cnt 'health-guard\.sh')
-say "  进程  hunter=$H(2) sup=$S(2) cache=$C(1) runtime=$R(1) public=$P(1) readonly=$RO(1) health=$HG(1)"
+# 🔴 2026-11-26 单实例适配：main2(11-06)、main3(11-24) 均已取消，期望 hunter/sup=1、9752=0。
+#    旧版写死 (2)/(1) 导致单实例健康时反而报 4 项假异常，比没有体检更误导。
+say "  进程  hunter=$H(1) sup=$S(1) cache=$C(1) runtime=$R(1) public=$P(1) readonly=$RO(1) health=$HG(1)"
 P9750=$(pl 9750); P9751=$(pl 9751); P9752=$(pl 9752); P8899=$(pl 8899); P8898=$(pl 8898)
-say "  端口  9750=$P9750(1) 9751=$P9751(0) 9752=$P9752(1) 8899=$P8899(1) 8898=$P8898(1)"
+say "  端口  9750=$P9750(1) 9751=$P9751(0) 9752=$P9752(0 已取消) 8899=$P8899(1) 8898=$P8898(1)"
 
 L0BAD=0
-[ "$H" -ne 2 ] && L0BAD=$((L0BAD+1))
-[ "$S" -ne 2 ] && L0BAD=$((L0BAD+1))
+[ "$H" -ne 1 ] && L0BAD=$((L0BAD+1))
+[ "$S" -ne 1 ] && L0BAD=$((L0BAD+1))
 [ "$P9750" -lt 1 ] && L0BAD=$((L0BAD+1))
-[ "$P9752" -lt 1 ] && L0BAD=$((L0BAD+1))
+# 9752 期望为 0：若竟在监听说明残留 main3，反而算异常
+[ "$P9752" -ne 0 ] && L0BAD=$((L0BAD+1))
 [ "$P9751" -ne 0 ] && L0BAD=$((L0BAD+1))
 [ "$P8899" -lt 1 ] && L0BAD=$((L0BAD+1))
 
-# 登录态（每个号都要查，不能被瞬态吓到）
-for pp in 9750 9752; do
+# 登录态（只查主号；9752/main3 已取消，查它只会报 ERR 误导）
+for pp in 9750; do
   A=$(bash "$ROOT/scripts/check-alive.sh" "$pp" 2>&1 | tail -1)
   case "$A" in
     *LOGIN_EXPIRED*)
@@ -220,8 +223,10 @@ console.log("Y "+n+" "+(j/n*100).toFixed(1)+" "+(nf/n*100).toFixed(1)+" "+(np/n*
 echo
 say "【L3 质量层】"
 L3BAD=0
-for f in accounts/main/work/h35.log accounts/main3/work/h35.log; do
-  acc=$(echo "$f" | cut -d/ -f2)
+# 🔴 2026-11-26：主号单实例模式日志在 douyin-auto/h35.log（不是 accounts/main/work），
+#    另外两个账号已取消，不再检查它们的日志。
+for f in douyin-auto/h35.log; do
+  acc="main"
   [ -f "$f" ] || { say "  ⛔ $acc 日志不存在"; L3BAD=$((L3BAD+1)); continue; }
   S2=$(grep -n '=== hunter35' "$f" | tail -1 | cut -d: -f1)
   T=$(tail -n +"$S2" "$f")
