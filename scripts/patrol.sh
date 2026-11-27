@@ -54,7 +54,15 @@ joined=$(printf '%s' "$T"|grep -ac '结果: joined') \
 空白=$(printf '%s' "$T"|grep -ac '页面空白') \
 FATAL=$(printf '%s' "$T"|grep -c FATAL) \
 记账失败=$(printf '%s' "$T"|grep -ac '抖币消费记账失败') \
-日志停=$(($(date +%s)-$(stat -f '%m' "$F")))s"
+ ws-dead=$(printf '%s' "$T"|grep -ac 'ws-dead') \
+ 空轮=$(printf '%s' "$T"|grep -ac '本轮无合适房间') \
+ 日志停=$(($(date +%s)-$(stat -f '%m' "$F")))s"
+    # 🔴 2026-11-27 采集假死盲区：自检 OK 但 ws-dead/空轮连续增长时采集实际已停摆。
+    #    实测连续 12 轮 0 房、自检仍报 OK，靠这行才发现，重启后恢复。
+    _wd=$(printf '%s' "$T"|grep -ac 'ws-dead'); _er=$(printf '%s' "$T"|grep -ac '本轮无合适房间')
+    if [ "${_wd:-0}" -ge 3 ] || [ "${_er:-0}" -ge 8 ]; then
+      echo "  ⚠️ 采集疑似假死：ws-dead=${_wd} 空轮=${_er}，自检OK可能是假象，考虑 fudai.sh restart（先确认非守候）"
+    fi
   fi
 fi
 
