@@ -2705,74 +2705,15 @@ nohup bash "$PWD/scripts/health-guard.sh" >> "$PWD/douyin-auto/health-guard-boot
 按房间分组复核后同房间 0 重复，去重功能正常。
 **判定「去重是否生效」必须按去重 key 分组，不能用全局计数。**
 
-## 2026-11-26：单实例架构对齐 + P0 安全止血 + 自主进化恢复
+## 2026-11-26 定稿规则与指针
 
-用户上传深度诊断报告（commit 83b2399 审计）后要求按建议优化，并多次强调
-「先分析再动手、不确定就多问、改完必须验证副作用、不要找不到事做」。
-当日完成 12 次提交，下面只记**可复用的判据与教训**。
+### 规则原文（可执行）
+- **Server酱 key 不得进仓库**：`.env.local` 三层 fallback；代码改了救不回 git 历史中的 key，必须去 Server酱后台重置。
+- **推送防呆**：手工 `--win` 无 `--confirm` 一律强制 dry-run 并加【测试】前缀，不造假中奖消息、不浪费消息配额。改推送代码后必须回归 dry-run 三入口。
+- **账号取消后改脚本**：先区分注释历史与运行代码；main2/main3 已取消，9752 期望 0、绝不拉起。
+- **主号关注名单**：`ACCOUNT_TAG='default'` 与 `main` 是同一号，读 `following-cache.json` 时 main 优先、default 兜底。
+- **跨文件配对脚本**：先打印两边真实字段名（participations 用 `url`、losses 用 `room`），不得假设同名。
+- **严禁用当前名单倒推历史拦截**：必须按拦截时间戳对齐当时的名单快照。
 
-### 一、账号取消后的遗留必须先扫再改
-main2（11-06）、main3（11-24）取消后，多账号时代的代码大量残留。
-扫描时必须区分「注释里的历史说明」与「实际运行代码」——grep 到 main3/9751
-就改会误伤（诊断脚本的注释里写着 9751 反而被当成硬编码）。已实际修复：
-- `inspect.sh`：写死 hunter/sup 期望 2、9752 期望 1，健康时反报 4 项假异常，
-  比没有体检更误导；改为期望 1/0、只查 9750、日志指向 `douyin-auto/h35.log`。
-- `diagnose-fudai-visibility.mjs`：硬编码连 9751，一跑就报「端口无页面标签」；
-  改为第二端口默认 9752、不存活自动降级单实例基线诊断。
-- `verify-win.mjs`：复用主号 profile 且无条件删 SingletonLock，主号在跑时误执行会
-  双开搞崩主号；加「9750 在跑则拒绝启动」硬防护。
-- `web/server.mjs account-use`：会用 `accounts/main/profile` 旧 Cookies（老 2 天）
-  覆盖今天活跃的 profile → 掉线需重扫；对 main/default 直接拒绝（公网层本就 403）。
-
-### 二、关注名单键错位才是「假性风控」真凶
-主号无 `--account` 时 `ACCOUNT_TAG='default'`，而刷新任务写 `following-cache.json`
-的 `main` 键（390 人）；`isFollowedByName` 旧版只读 `default`（8 人旧数据），
-导致已关注主播被判未关注 → need-follow 拦截白丢福袋。决定性验证：用 4 个高频
-蹲守房间主播名对比，修复前全判「未关注」、修复后全判「已关注」。
-主号读关注名单统一 `main` 优先、`default` 兜底；其他账号不受影响。
-
-### 三、P0 安全止血
-- Server酱 sendKey 曾明文提交进 git（commit 6b46d46）：迁到 gitignore 的
-  `.env.local`，三层 fallback（环境变量→.env.local→旧配置兼容）。
-  **代码改了救不回历史里的 key，必须去 Server酱后台重置才是真止损。**
-  **推送链路验证法（不消耗配额）**：`node scripts/notify-serverchan.mjs --from-hunter
-  --title t --desp d --dry` 三个入口都应显示 `SCT...` 前 8 位；手工 `--win` 即使
-  不加 `--confirm` 也必须被强制 dry-run 且标题带【测试】——这是「不造假中奖消息、
-  不浪费用户消息资源」的防呆，用户曾明确批评过假通知，改推送代码后必须回归这条。
-- 看板 POST `/api/action` 无鉴权（同 WiFi 任意设备可启停）：随机 token 注入前端、
-  POST 校验。副作用：公网只读代理只转 body 不转 header，手机「下一房」被 401 —
-  必须透传 `X-Web-Token`；且 `next-room` 旧版只写 `accounts/main/work/cmd`，
-  主号实际读 `douyin-auto/cmd`，按钮从上线起就是坏的 — 两处都写。
-  验证：公网带 token 成功 / 不带 token 403 / 两处 skip 文件都生成后清理。
-
-### 四、自主进化曾静默停摆 3 天
-`health-guard.sh`（每 30 分钟学黑名单/时段画像、每小时刷新关注）自己挂了没人管：
-watchdog 只监控 hunter/web/public，不监控 health-guard。且旧版 9752 无监听会
-自动拉起已取消的 main3、按双账号期望 2 告警、拉主实例用错 `--account` 模式，
-故不能直接拉起。改造：加 `EXPECTED_HUNTERS=1` 单实例口径、9752 默认期望 0
-不拉 main3、主实例拉起改正确路径、日志检查指向实际主日志；`patrol.sh` 进程行
-加 health 计数防再次静默消失。恢复证据：`auto-blacklist.json`/`hour-windows.json`
-mtime 从 11-23 跳到当天，关注名单拉到 390 人。
-
-### 五、根因修正：系统卡顿不是供电断言
-Mac 反复 load 150~330 的真正原因是**内存耗尽+换页**：32GB 机器上 Parallels
-虚拟机独占 13.6GB、swap 从 4G 扩到 7.1G 已用 5.9G、空闲页仅约 15MB；
-抓取 Chrome 仅 1.08GB 不是问题源。供电断言是伴生现象。给用户的最优建议是
-**关掉/调小 Parallels** 而非重启电脑。`patrol.sh` 加内存大户告警（>4GB 即提示）。
-
-### 六、用数据排除的疑点（避免无效改动）
-- 0 中奖不是检测漏判：losses 2519 条中 0 条含中奖意味文案；开奖弹窗二次核验
-  （`recheck:已参与`）可靠；今日参与/开奖配对 30/34，未配对的都是刚参与在守候。
-- 参与步骤 `joinedTxt:0` 但 `verified:true` 是正常的：判定靠重开面板确认
-  「已参与」服务端状态，不是靠文案。
-- 决策不做（理由已评估）：门槛热更新（const 使用点太多，部分热更会不一致）、
-  单次 JS 求值替代 DOM 搜索（核心链路风险大于收益，前 3 词并发已覆盖 99.8%）、
-  消息中心权威对账（需独立 cookie 且可能触发风控）。
-- 跨文件配对脚本必须先打印两边真实字段名：participations 用 `url`、losses 用
-  `room`，假设 `r.room` 会得出「34 次参与全无开奖」的假结论。
-
-### 判据沉淀
-**「改完必须验证副作用」不是口号**：鉴权改动差点让手机换房按钮彻底失效，
-正是沿完整调用链（前端→公网代理→上游）验证才抓到 header 丢失。
-**「不要为凑产出改核心链路」**：连续多轮审查确认系统健康时，如实记录
-「不做及理由」比制造回归更负责。
+### 指针（叙述细节、实测数字、过程记录）
+- 完整排查记录见 `docs/incidents/2026-11-26-P0安全与单实例适配.md`。
